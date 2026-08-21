@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1786760325671,
+      "tag": "0000_spooky_zarek",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1786768070509,
+      "tag": "0001_outstanding_lord_hawal",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786772183611,
+      "tag": "0002_charming_edwin_jarvis",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786775779836,
+      "tag": "0003_neat_chronomancer",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786778676661,
+      "tag": "0004_quick_madame_web",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786794649748,
+      "tag": "0005_amused_speedball",
+      "breakpoints": true
+    }
+  ]
+}

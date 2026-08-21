@@ -1,0 +1,46 @@
+{
+  email {$ACME_EMAIL}
+  admin off
+}
+
+{$APP_DOMAIN} {
+  encode zstd gzip
+
+  request_body {
+    max_size 4MB
+  }
+
+  header {
+    Strict-Transport-Security "max-age=15552000"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+    -Server
+  }
+
+  reverse_proxy https://{$SITES_ORIGIN_HOST} {
+    header_up Host {$SITES_ORIGIN_HOST}
+    header_up X-Origin-Gateway-Token {$ORIGIN_GATEWAY_SECRET}
+    header_up X-Real-Client-IP {remote_host}
+    header_up X-Forwarded-Host {host}
+    header_up X-Forwarded-Proto https
+
+    transport http {
+      tls_server_name {$SITES_ORIGIN_HOST}
+      dial_timeout 8s
+      response_header_timeout 120s
+    }
+
+    health_uri /api/health
+    health_interval 30s
+    health_timeout 8s
+    health_headers {
+      X-Origin-Gateway-Token {$ORIGIN_GATEWAY_SECRET}
+    }
+  }
+
+  handle_errors {
+    respond "声笺暂时维护中，请稍后再试。" 503
+  }
+}
