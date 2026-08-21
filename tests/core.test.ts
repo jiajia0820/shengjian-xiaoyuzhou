@@ -77,7 +77,7 @@ class SqliteD1Database {
 }
 
 declare global {
-  var __aiProviderTestEnv: { DB: SqliteD1Database } | undefined;
+  var __aiProviderTestEnv: { DB: SqliteD1Database; TOKEN_ENCRYPTION_KEY?: string } | undefined;
 }
 
 registerHooks({
@@ -281,6 +281,180 @@ test("rejects unsafe custom API roots", () => {
     "https://localhost./v1",
     "https://api.internal/v1",
   ]) assert.throws(() => normalizeCustomBaseUrl(value));
+});
+
+test("validates a clean custom AI configuration and rejects unsafe custom keys", async () => {
+  const settings = await import("../lib/ai-settings.ts");
+  assert.equal(typeof settings.validateCustomAiInput, "function");
+  assert.deepEqual(settings.validateCustomAiInput({
+    apiKey: "relay-token-1234",
+    baseUrl: " https://relay.example/v1/ ",
+    model: "  gpt-5.6-luna  ",
+    apiFormat: "responses",
+    reasoningEffort: "high",
+  }), {
+    apiKey: "relay-token-1234",
+    baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna",
+    apiFormat: "responses",
+    reasoningEffort: "high",
+  });
+  assert.deepEqual(settings.validateCustomAiInput({
+    apiKey: "chat-token-4321",
+    baseUrl: "https://relay.example/v1",
+    model: "chat-model",
+    apiFormat: "chat_completions",
+    reasoningEffort: null,
+  }), {
+    apiKey: "chat-token-4321",
+    baseUrl: "https://relay.example/v1",
+    model: "chat-model",
+    apiFormat: "chat_completions",
+    reasoningEffort: null,
+  });
+
+  for (const body of [
+    {
+      apiKey: "has whitespace",
+      baseUrl: "https://relay.example/v1",
+      model: "model",
+      apiFormat: "responses",
+      reasoningEffort: null,
+    },
+    {
+      apiKey: "relay-token-1234",
+      baseUrl: "https://relay.example/v1",
+      model: "model",
+      apiFormat: "chat_completions",
+      reasoningEffort: "low",
+    },
+    {
+      apiKey: "relay-token-1234",
+      baseUrl: "https://relay.example/v1",
+      model: "model",
+      apiFormat: "responses",
+      reasoningEffort: "maximum",
+    },
+  ]) assert.throws(() => settings.validateCustomAiInput(body), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.doesNotMatch(error.message, /has whitespace|relay-token-1234/);
+    return true;
+  });
+});
+
+test("stores provider configurations without exposing credentials and preserves the chosen default", async () => {
+  const database = new DatabaseSync(":memory:");
+  const testKey = Buffer.alloc(32, 9).toString("base64");
+  if (globalThis.__aiProviderTestEnv) {
+    globalThis.__aiProviderTestEnv.DB = new SqliteD1Database(database);
+    globalThis.__aiProviderTestEnv.TOKEN_ENCRYPTION_KEY = testKey;
+  } else {
+    globalThis.__aiProviderTestEnv = {
+      DB: new SqliteD1Database(database),
+      TOKEN_ENCRYPTION_KEY: testKey,
+    };
+  }
+  const settings = await import("../lib/ai-settings.ts");
+  const runtime = await import("../lib/runtime.ts");
+  assert.equal(typeof runtime.getRuntimeEnv().TOKEN_ENCRYPTION_KEY, "string");
+
+  const customStatus = await settings.saveAiProvider("settings-owner", {
+    provider: "custom",
+    apiKey: "relay-token-1234",
+    baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna",
+    apiFormat: "responses",
+    reasoningEffort: "medium",
+  });
+  assert.equal(customStatus.defaultProvider, "custom");
+  assert.deepEqual(customStatus.providers.deepseek, {
+    provider: "deepseek",
+    connected: false,
+    model: "deepseek-v4-flash",
+    apiFormat: "chat_completions",
+    keyHint: null,
+    connectedAt: null,
+  });
+  assert.deepEqual(customStatus.providers.custom, {
+    provider: "custom",
+    connected: true,
+    baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna",
+    apiFormat: "responses",
+    reasoningEffort: "medium",
+    keyHint: "•••• 1234",
+    connectedAt: customStatus.providers.custom.connectedAt,
+  });
+  assert.doesNotMatch(JSON.stringify(customStatus), /relay-token-1234|api_key_cipher|Authorization/);
+  assert.deepEqual(await settings.readActiveAiConfiguration("settings-owner"), {
+    provider: "custom",
+    apiKey: "relay-token-1234",
+    baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna",
+    apiFormat: "responses",
+    reasoningEffort: "medium",
+  });
+
+  const deepseekStatus = await settings.saveAiProvider("settings-owner", {
+    provider: "deepseek",
+    apiKey: "sk-0123456789",
+  });
+  assert.equal(deepseekStatus.defaultProvider, "custom");
+  assert.deepEqual(deepseekStatus.providers.deepseek, {
+    provider: "deepseek",
+    connected: true,
+    model: "deepseek-v4-flash",
+    apiFormat: "chat_completions",
+    keyHint: "•••• 6789",
+    connectedAt: deepseekStatus.providers.deepseek.connectedAt,
+  });
+  await assert.rejects(
+    () => settings.saveAiProvider("settings-owner", { provider: "deepseek", apiKey: "sk-0123456789", model: "ignored" }),
+    (error: unknown) => error instanceof HttpError && error.code === "INVALID_AI_PROVIDER_INPUT",
+  );
+
+  const switchedStatus = await settings.setDefaultAiProvider("settings-owner", "deepseek");
+  assert.equal(switchedStatus.defaultProvider, "deepseek");
+  assert.deepEqual(await settings.readActiveAiConfiguration("settings-owner"), {
+    provider: "deepseek",
+    apiKey: "sk-0123456789",
+    baseUrl: null,
+    model: "deepseek-v4-flash",
+    apiFormat: "chat_completions",
+    reasoningEffort: null,
+  });
+  await assert.rejects(
+    () => settings.setDefaultAiProvider("unconfigured-owner", "custom"),
+    (error: unknown) => error instanceof HttpError && error.code === "AI_PROVIDER_NOT_CONNECTED",
+  );
+
+  const removedStatus = await settings.removeAiProvider("settings-owner", "deepseek");
+  assert.equal(removedStatus.defaultProvider, "custom");
+  assert.equal(removedStatus.providers.deepseek.connected, false);
+  assert.equal(removedStatus.providers.custom.connected, true);
+});
+
+test("keeps AI provider settings routes safe and provider-aware", async () => {
+  const service = await readFile(new URL("../lib/ai-settings.ts", import.meta.url), "utf8");
+  const route = await readFile(new URL("../app/api/ai-settings/route.ts", import.meta.url), "utf8");
+  const getRoute = route.slice(route.indexOf("export async function GET"), route.indexOf("export async function PUT"));
+
+  assert.match(service, /export function validateCustomAiInput\(body: Record<string, unknown>\)/);
+  assert.match(service, /export async function getAiSettingsStatus\(userId: string\)/);
+  assert.match(service, /export async function saveAiProvider\(userId: string, body: Record<string, unknown>\)/);
+  assert.match(service, /export async function setDefaultAiProvider\(userId: string, provider: AiProvider\)/);
+  assert.match(service, /export async function removeAiProvider\(userId: string, provider: AiProvider\)/);
+  assert.match(service, /export async function readActiveAiConfiguration\(userId: string\)/);
+  assert.match(route, /export async function PATCH\(request: Request\)/);
+  assert.match(route, /body\.provider/);
+  assert.match(route, /setDefaultAiProvider\(/);
+  assert.match(route, /requireApiUser\(\{ mutation: true \}\)/);
+  assert.match(route, /export async function DELETE\(request: Request\)/);
+  assert.match(route, /new URL\(request\.url\)/);
+  assert.match(route, /removeAiProvider\(/);
+  assert.match(getRoute, /getAiSettingsStatus\(user\.userId\)/);
+  assert.doesNotMatch(getRoute, /apiKey|api_key_cipher|Authorization/);
+  assert.doesNotMatch(route, /console\.(?:log|error|warn)/);
 });
 
 test("maps a custom Responses request with selected reasoning effort", () => {
