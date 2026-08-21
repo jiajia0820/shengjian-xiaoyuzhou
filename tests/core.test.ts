@@ -204,7 +204,7 @@ test("migrates legacy provider data in order without changing saved values", asy
   });
 });
 
-test("preserves runtime-staged custom settings, preference, and analysis when 0006 runs later", async () => {
+test("preserves runtime-staged data and refreshes a warm runtime when 0006 runs later", async () => {
   const migration = await readFile(new URL("../drizzle/0006_custom_ai_providers.sql", import.meta.url), "utf8");
   const database = createLegacyAiDatabase();
   globalThis.__aiProviderTestEnv = { DB: new SqliteD1Database(database) };
@@ -241,6 +241,26 @@ test("preserves runtime-staged custom settings, preference, and analysis when 00
   });
   assert.equal(row(database, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_settings_runtime'"), null);
   assert.equal(row(database, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'analysis_results_runtime'"), null);
+
+  await db.saveAiSetting({
+    user_id: "owner", provider: "custom", api_format: "responses", base_url: "https://relay.example/v1",
+    model: "gpt-5.6-sol", reasoning_effort: "high", api_key_cipher: "custom-cipher", key_hint: "•••• 9876",
+    connected_at: "2026-02-01T00:00:00.000Z", updated_at: "2026-03-01T00:00:00.000Z",
+  });
+  assert.equal((await db.getAiSetting("owner", "custom"))?.model, "gpt-5.6-sol");
+
+  await db.upsertAnalysisResult({
+    user_id: "owner", eid: "episode", slot: "summary", kind: "summary", framework_id: null,
+    framework_name: null, framework_snapshot: null, source_type: "current", source_hash: "custom-hash",
+    model: "gpt-5.6-sol", provider: "custom", api_format: "responses", result_key: "post-migration-result",
+    generated_at: "2026-03-01T00:00:00.000Z",
+  });
+  assert.deepEqual(await db.getAnalysisResult("owner", "episode", "summary"), {
+    id: 1, user_id: "owner", eid: "episode", slot: "summary", kind: "summary", framework_id: null,
+    framework_name: null, framework_snapshot: null, source_type: "current", source_hash: "custom-hash",
+    model: "gpt-5.6-sol", provider: "custom", api_format: "responses", result_key: "post-migration-result",
+    generated_at: "2026-03-01T00:00:00.000Z",
+  });
 });
 
 test("normalizes a safe custom API root", () => {

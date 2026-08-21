@@ -1,3 +1,6 @@
+-- Supported pre-0006 states are 0005-or-earlier tables or runtime_staged sidecars.
+-- The unmarked final-shape intermediate runtime was never released and must not be deployed:
+-- SQLite cannot safely branch over the columns missing from the legacy tables in static SQL.
 CREATE TABLE IF NOT EXISTS `ai_settings_runtime` (
 	`user_id` text NOT NULL,
 	`provider` text NOT NULL,

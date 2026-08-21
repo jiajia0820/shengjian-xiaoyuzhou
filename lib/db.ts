@@ -119,8 +119,18 @@ let aiSettingsTable = "ai_settings";
 let analysisResultsTable = "analysis_results";
 
 export async function ensureSchema(): Promise<void> {
-  if (schemaReady) return;
   const db = getRuntimeEnv().DB;
+  if (schemaReady) {
+    if (aiSettingsTable === AI_SETTINGS_RUNTIME_TABLE) {
+      const schemaState = await db.prepare("SELECT value FROM app_state WHERE key = ?")
+        .bind(AI_PROVIDER_SCHEMA_STATE_KEY).first<{ value: string }>();
+      if (schemaState?.value === AI_PROVIDER_SCHEMA_MIGRATED) {
+        aiSettingsTable = "ai_settings";
+        analysisResultsTable = "analysis_results";
+      }
+    }
+    return;
+  }
   await db.batch([
     db.prepare(`CREATE TABLE IF NOT EXISTS connections (
       user_id TEXT PRIMARY KEY NOT NULL,
