@@ -342,6 +342,22 @@ test("validates a clean custom AI configuration and rejects unsafe custom keys",
   });
 });
 
+test("normalizes an omitted custom Responses reasoning effort to null", async () => {
+  const settings = await import("../lib/ai-settings.ts");
+  assert.deepEqual(settings.validateCustomAiInput({
+    apiKey: "relay-token-1234",
+    baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna",
+    apiFormat: "responses",
+  }), {
+    apiKey: "relay-token-1234",
+    baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna",
+    apiFormat: "responses",
+    reasoningEffort: null,
+  });
+});
+
 test("stores provider configurations without exposing credentials and preserves the chosen default", async () => {
   const database = new DatabaseSync(":memory:");
   const testKey = Buffer.alloc(32, 9).toString("base64");
@@ -432,6 +448,17 @@ test("stores provider configurations without exposing credentials and preserves 
   assert.equal(removedStatus.defaultProvider, "custom");
   assert.equal(removedStatus.providers.deepseek.connected, false);
   assert.equal(removedStatus.providers.custom.connected, true);
+
+  const shortKeyStatus = await settings.saveAiProvider("short-key-owner", {
+    provider: "custom",
+    apiKey: "abcd",
+    baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna",
+    apiFormat: "responses",
+    reasoningEffort: null,
+  });
+  assert.doesNotMatch(JSON.stringify(shortKeyStatus), /abcd/);
+  assert.equal(shortKeyStatus.providers.custom.keyHint, "••••");
 });
 
 test("keeps AI provider settings routes safe and provider-aware", async () => {

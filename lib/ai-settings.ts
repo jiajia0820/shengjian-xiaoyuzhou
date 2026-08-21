@@ -108,13 +108,14 @@ function validateCustomApiFormat(value: unknown): AiApiFormat {
 }
 
 function validateReasoningEffort(value: unknown, apiFormat: AiApiFormat): ReasoningEffort | null {
-  if (value !== null && value !== "low" && value !== "medium" && value !== "high") {
+  const reasoningEffort = value ?? null;
+  if (reasoningEffort !== null && reasoningEffort !== "low" && reasoningEffort !== "medium" && reasoningEffort !== "high") {
     return invalidInput("INVALID_CUSTOM_AI_REASONING", "请选择有效的推理强度");
   }
-  if (apiFormat === "chat_completions" && value !== null) {
+  if (apiFormat === "chat_completions" && reasoningEffort !== null) {
     return invalidInput("INVALID_CUSTOM_AI_REASONING", "Chat Completions 不支持推理强度");
   }
-  return value;
+  return reasoningEffort;
 }
 
 export function validateCustomAiInput(body: Record<string, unknown>): CustomAiInput {
@@ -143,12 +144,15 @@ function validateDeepseekInput(body: Record<string, unknown>): string {
 }
 
 function keyHint(value: string): string {
-  return `•••• ${value.slice(-4)}`;
+  return value.length >= 5 ? `•••• ${value.slice(-4)}` : "••••";
 }
 
 function safeKeyHint(value: string): string | null {
-  const suffix = value.trim().slice(-4);
-  return suffix ? `•••• ${suffix}` : null;
+  const hint = value.trim();
+  if (!hint) return null;
+  if (hint === "••••") return hint;
+  const suffix = hint.slice(-4);
+  return suffix ? `•••• ${suffix}` : "••••";
 }
 
 function toDeepseekStatus(setting: AiSettingRecord | undefined): DeepseekProviderStatus {
