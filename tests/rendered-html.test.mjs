@@ -94,7 +94,10 @@ test("keeps the provider-neutral two-step setup guide and safe dual-provider set
   assert.match(workspace, /Codex 中转预设/);
   assert.match(workspace, /gpt-5\.6-luna/);
   assert.match(workspace, /Base URL 与 Key 仍须手动填写/);
-  assert.doesNotMatch(workspace, /direct-api\.lvjiayang\.xyz/);
+  const preset = workspace.match(/function applyCodexPreset\(\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(preset, "Codex 中转预设必须由受限函数实现");
+  assert.match(preset, /^\s*setCustomModel\("gpt-5\.6-luna"\);\s*setCustomApiFormat\("responses"\);\s*setCustomReasoningEffort\("medium"\);\s*$/);
+  assert.doesNotMatch(preset, /setCustomBaseUrl|https?:\/\//);
   assert.match(workspace, /const \[setupGuideOpen, setSetupGuideOpen\] = useState\(true\)/);
   assert.doesNotMatch(workspace, /setSetupGuideOpen\(!status\.connected \|\| !aiStatus\.connected\)/);
   assert.doesNotMatch(workspace, /邮箱登录待配置|绑定独立邮箱/);

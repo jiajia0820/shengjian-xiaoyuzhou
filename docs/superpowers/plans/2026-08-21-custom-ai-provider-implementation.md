@@ -491,9 +491,11 @@ assert.match(workspace, /AI 提供商设置/);
 assert.match(workspace, /自定义 API/);
 assert.match(workspace, /Codex 中转预设/);
 assert.match(workspace, /gpt-5\.6-luna/);
-assert.doesNotMatch(workspace, /direct-api\.lvjiayang\.xyz/);
+assert.doesNotMatch(preset, /setCustomBaseUrl|https?:\/\//);
 assert.match(workspace, /Base URL 与 Key 仍须手动填写/);
 ~~~
+
+预设函数只允许写入模型、接口格式和推理强度；不得内嵌或预填任何 Base URL。
 
 - [ ] **Step 2: 运行渲染测试并确认新界面尚不存在**
 

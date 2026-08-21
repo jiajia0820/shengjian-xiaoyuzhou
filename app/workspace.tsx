@@ -568,6 +568,12 @@ export default function Workspace({
     }
   }
 
+  function applyCodexPreset() {
+    setCustomModel("gpt-5.6-luna");
+    setCustomApiFormat("responses");
+    setCustomReasoningEffort("medium");
+  }
+
   const defaultProviderStatus = aiSettings.defaultProvider ? aiSettings.providers[aiSettings.defaultProvider] : null;
   const defaultProviderName = aiSettings.defaultProvider === "deepseek" ? "DeepSeek" : "自定义 API";
 
@@ -811,11 +817,7 @@ export default function Workspace({
                   </span>
                 </div>
                 {aiSettings.defaultProvider === "custom" && <span className="provider-default-chip">默认</span>}
-                <button className="preset-action" type="button" onClick={() => {
-                  setCustomModel("gpt-5.6-luna");
-                  setCustomApiFormat("responses");
-                  setCustomReasoningEffort("medium");
-                }}>Codex 中转预设</button>
+                <button className="preset-action" type="button" onClick={applyCodexPreset}>Codex 中转预设</button>
                 <small className="preset-note">Base URL 与 Key 仍须手动填写。</small>
                 <div className="provider-field-row">
                   <label>
