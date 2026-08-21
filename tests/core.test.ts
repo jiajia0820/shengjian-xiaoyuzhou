@@ -833,10 +833,14 @@ test("adds server-owned frontmatter to AI Markdown", () => {
     kind: "summary", sourceType: "current", sourceHash: "abc123",
     generatedAt: "2026-08-15T01:00:00.000Z", body: "## 一句话主旨\n\n建立统计直觉。",
     frameworkId: SYSTEM_FRAMEWORK.id, frameworkName: SYSTEM_FRAMEWORK.name,
+    provider: "custom", apiFormat: "responses", model: "gpt-5.6-luna",
   });
   assert.match(markdown, /result_type: "summary"/);
   assert.match(markdown, /analysis_source: "current"/);
-  assert.match(markdown, /model: "deepseek-v4-flash"/);
+  assert.match(markdown, /provider: "custom"/);
+  assert.match(markdown, /api_format: "responses"/);
+  assert.match(markdown, /model: "gpt-5.6-luna"/);
+  assert.doesNotMatch(markdown, /relay\.example|relay-secret/);
   assert.match(markdown, /# 如何建立统计直觉｜内容梳理/);
 });
 

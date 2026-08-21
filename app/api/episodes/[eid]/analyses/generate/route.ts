@@ -3,9 +3,8 @@ import {
   generateAnalysisBody,
   type AnalysisKind,
   type AnalysisSource,
-  ANALYSIS_MODEL,
 } from "@/lib/analysis";
-import { readDeepseekApiKey } from "@/lib/ai-settings";
+import { readActiveAiConfiguration } from "@/lib/ai-settings";
 import {
   acquireAnalysisLease,
   consumeUsage,
@@ -71,9 +70,9 @@ export async function POST(request: Request, context: Context) {
     }
     try {
       const generatedAt = new Date().toISOString();
-      const apiKey = await readDeepseekApiKey(user.userId);
+      const config = await readActiveAiConfiguration(user.userId);
       const generatedBody = await generateAnalysisBody({
-        apiKey,
+        config,
         kind,
         markdown,
         episode,
@@ -87,6 +86,9 @@ export async function POST(request: Request, context: Context) {
         sourceHash,
         generatedAt,
         body: generatedBody,
+        provider: config.provider,
+        apiFormat: config.apiFormat,
+        model: config.model,
         frameworkId,
         frameworkName,
       });
@@ -103,7 +105,9 @@ export async function POST(request: Request, context: Context) {
         framework_snapshot: frameworkSnapshot,
         source_type: sourceType,
         source_hash: sourceHash,
-        model: ANALYSIS_MODEL,
+        model: config.model,
+        provider: config.provider,
+        api_format: config.apiFormat,
         result_key: resultKey,
         generated_at: generatedAt,
       } as const;

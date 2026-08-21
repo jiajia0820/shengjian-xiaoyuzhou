@@ -1,4 +1,5 @@
 import type { EpisodeRecord } from "./db.ts";
+import type { AiApiFormat, AiProvider } from "./ai-provider.ts";
 
 export const ANALYSIS_MODEL = "deepseek-v4-flash";
 export type AnalysisKind = "summary" | "learning_prompt";
@@ -49,6 +50,9 @@ export function buildAnalysisMarkdown(args: {
   sourceHash: string;
   generatedAt: string;
   body: string;
+  provider: AiProvider;
+  apiFormat: AiApiFormat;
+  model: string;
   frameworkId?: string | null;
   frameworkName?: string | null;
 }): string {
@@ -65,7 +69,9 @@ framework_id: ${yaml(args.frameworkId ?? null)}
 framework_name: ${yaml(args.frameworkName ?? null)}
 analysis_source: ${yaml(args.sourceType)}
 source_hash: ${yaml(args.sourceHash)}
-model: ${yaml(ANALYSIS_MODEL)}
+provider: ${yaml(args.provider)}
+api_format: ${yaml(args.apiFormat)}
+model: ${yaml(args.model)}
 generated_at: ${yaml(args.generatedAt)}
 ---
 
