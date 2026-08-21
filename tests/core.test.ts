@@ -82,6 +82,7 @@ declare global {
 }
 
 function routeMockModule(specifier: string): string | undefined {
+  if (!globalThis.__analysisGenerateRouteTestDeps) return undefined;
   const exports: Record<string, string> = {
     "@/lib/analysis": "buildAnalysisMarkdown,generateAnalysisBody",
     "@/lib/ai-settings": "readActiveAiConfiguration",
@@ -116,6 +117,16 @@ registerHooks({
     }
     return nextResolve(specifier, context);
   },
+});
+
+test("only resolves analysis route mocks while their dependencies are active", () => {
+  const previous = globalThis.__analysisGenerateRouteTestDeps;
+  try {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+    assert.equal(routeMockModule("@/lib/analysis"), undefined);
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = previous;
+  }
 });
 
 function createLegacyAiDatabase(): DatabaseSync {
