@@ -425,7 +425,7 @@ export default function Workspace({
 
   async function generateAnalysis() {
     if (!selected || documentTab === "transcript") return;
-    if (!Boolean(aiSettings.defaultProvider)) {
+    if (!aiSettings.defaultProvider) {
       setAiModalOpen(true);
       setNotice({ kind: "info", text: "请先设置 AI 提供商" });
       return;

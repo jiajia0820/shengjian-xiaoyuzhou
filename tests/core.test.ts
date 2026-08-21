@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
 import { buildAnalysisMarkdown, splitForAnalysis } from "../lib/analysis-format.ts";
 import { SYSTEM_FRAMEWORK, validateFrameworkInput } from "../lib/frameworks.ts";
@@ -19,19 +19,19 @@ type SqliteRow = Record<string, unknown>;
 class SqliteD1Statement {
   private readonly database: DatabaseSync;
   private readonly query: string;
-  private readonly values: unknown[];
+  private readonly values: SQLInputValue[];
 
   constructor(
     database: DatabaseSync,
     query: string,
-    values: unknown[] = [],
+    values: SQLInputValue[] = [],
   ) {
     this.database = database;
     this.query = query;
     this.values = values;
   }
 
-  bind(...values: unknown[]) {
+  bind(...values: SQLInputValue[]) {
     return new SqliteD1Statement(this.database, this.query, values);
   }
 
@@ -178,7 +178,7 @@ function applyCustomAiMigration(database: DatabaseSync, migration: string) {
   }
 }
 
-function row<T extends SqliteRow>(database: DatabaseSync, query: string, ...values: unknown[]): T | null {
+function row<T extends SqliteRow>(database: DatabaseSync, query: string, ...values: SQLInputValue[]): T | null {
   const value = database.prepare(query).get(...values) as SqliteRow | undefined;
   return value ? Object.fromEntries(Object.entries(value)) as T : null;
 }

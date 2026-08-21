@@ -158,7 +158,7 @@ function safeKeyHint(value: string): string {
     if (typeof hint !== "object" || hint === null || !Object.prototype.hasOwnProperty.call(hint, "version")
       || !Object.prototype.hasOwnProperty.call(hint, "length")) return "••••";
     const { version, length, suffix } = hint as { version?: unknown; length?: unknown; suffix?: unknown };
-    if (version !== 1 || !Number.isSafeInteger(length) || length < 1 || length > MAX_API_KEY_LENGTH) return "••••";
+    if (version !== 1 || typeof length !== "number" || !Number.isSafeInteger(length) || length < 1 || length > MAX_API_KEY_LENGTH) return "••••";
     if (length <= 4) return "••••";
     if (typeof suffix !== "string" || suffix.length !== 4 || /[\s\p{Cc}]/u.test(suffix)) return "••••";
     return `•••• ${suffix}`;

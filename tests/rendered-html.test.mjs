@@ -94,7 +94,7 @@ test("keeps the provider-neutral two-step setup guide and safe dual-provider set
   assert.match(workspace, /Codex 中转预设/);
   assert.match(workspace, /gpt-5\.6-luna/);
   assert.match(workspace, /Base URL 与 Key 仍须手动填写/);
-  const preset = workspace.match(/function applyCodexPreset\(\) \{([\s\S]*?)\n  \}/)?.[1];
+  const preset = workspace.match(/function applyCodexPreset\(\) \{([\s\S]*?)\n {2}\}/)?.[1];
   assert.ok(preset, "Codex 中转预设必须由受限函数实现");
   assert.match(preset, /^\s*setCustomModel\("gpt-5\.6-luna"\);\s*setCustomApiFormat\("responses"\);\s*setCustomReasoningEffort\("medium"\);\s*$/);
   assert.doesNotMatch(preset, /setCustomBaseUrl|https?:\/\//);
@@ -111,12 +111,12 @@ function functionBody(source, name) {
 
 test("keeps server status refreshes from partially rolling back custom provider drafts", async () => {
   const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
-  const refresh = workspace.match(/const applyAiSettings = useCallback\(\(status: AiSettingsStatus\) => \{([\s\S]*?)\n  \}, \[\]\);/)?.[1];
+  const refresh = workspace.match(/const applyAiSettings = useCallback\(\(status: AiSettingsStatus\) => \{([\s\S]*?)\n {2}\}, \[\]\);/)?.[1];
   assert.ok(refresh, "AI status refresh must remain a separate callback");
   assert.match(refresh, /^\s*setAiSettings\(status\);\s*$/);
   assert.doesNotMatch(refresh, /setCustom(BaseUrl|ApiKey|Model|ApiFormat|ReasoningEffort)/);
 
-  const load = workspace.match(/const loadAiSettings = useCallback\(async \(\) => \{([\s\S]*?)\n  \}, \[applyAiSettings, syncCustomDraft\]\);/)?.[1];
+  const load = workspace.match(/const loadAiSettings = useCallback\(async \(\) => \{([\s\S]*?)\n {2}\}, \[applyAiSettings, syncCustomDraft\]\);/)?.[1];
   assert.ok(load, "initial load must explicitly initialize the custom draft");
   assert.match(load, /applyAiSettings\(data\);\s*syncCustomDraft\(data\.providers\.custom\);/);
 

@@ -19,8 +19,11 @@
 - D1：账号连接、文稿索引、梳理框架与分析结果索引
 - R2：每期的 `original.md`、`current.md`、内容梳理与学习 Prompt
 - AES-GCM：服务端加密 access token 与 refresh token
-- DeepSeek Chat Completions API：V4 Flash，关闭思考模式，不启用联网工具
-- DeepSeek API Key 由用户在私有站点内填写，使用 AES-GCM 加密后存入 D1
+- AI 设置：DeepSeek 固定使用 `deepseek-v4-flash`、Chat Completions，并关闭 thinking；不启用联网工具
+- 自定义 OpenAI-compatible 连接：支持 HTTPS Responses 或 Chat Completions；用户手动填写 Base URL、API Key 和模型
+- AI API Key 由用户在私有站点的“AI 提供商设置”中填写，使用 AES-GCM 加密后存入 D1；Base URL 不写入分析结果
+- 分析结果只记录提供商、API 格式和模型，不记录 Base URL、完整 Key 或 Authorization 信息
+- Codex 中转预设仅预填 `gpt-5.6-luna`、Responses 和 `medium`；Base URL 与 API Key 始终需要用户填写
 - Sites 登录用户头：所有 API 的所有权隔离
 
 ## 本地验证
@@ -37,7 +40,7 @@ npm test
 ## 环境变量
 
 - `TOKEN_ENCRYPTION_KEY`：至少 32 字节的随机密钥；在 Sites 中必须标记为 Secret
-- DeepSeek API Key 不使用环境变量；登录站点后在“设置 DeepSeek”中加密保存
+- AI 提供商的 API Key 不使用环境变量；登录站点后在“AI 提供商设置”中加密保存。自定义连接的 Base URL 和 API Key 都必须由用户填写
 
 ## 数据迁移
 
@@ -57,4 +60,4 @@ npm run db:generate
 
 ### 安全边界
 
-本仓库只包含可复现源码、迁移文件和配置模板。每位部署者必须使用自己的小宇宙账号、DeepSeek API Key、Supabase/Tencent Cloud 凭据和存储资源。不要把 `.env`、访问令牌、Cookie、数据库导出或文稿正文提交到仓库。
+本仓库只包含可复现源码、迁移文件和配置模板。每位部署者必须使用自己的小宇宙账号、AI 提供商 API Key、Supabase/Tencent Cloud 凭据和存储资源。不要把 `.env`、访问令牌、Cookie、数据库导出、完整 API Key 或文稿正文提交到仓库。
