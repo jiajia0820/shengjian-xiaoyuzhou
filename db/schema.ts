@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const connections = sqliteTable("connections", {
   userId: text("user_id").primaryKey(),
@@ -55,6 +55,8 @@ export const analysisResults = sqliteTable("analysis_results", {
   sourceType: text("source_type").notNull(),
   sourceHash: text("source_hash").notNull(),
   model: text("model").notNull(),
+  provider: text("provider").notNull(),
+  apiFormat: text("api_format").notNull(),
   resultKey: text("result_key").notNull(),
   generatedAt: text("generated_at").notNull(),
 }, (table) => [
@@ -63,11 +65,23 @@ export const analysisResults = sqliteTable("analysis_results", {
 ]);
 
 export const aiSettings = sqliteTable("ai_settings", {
-  userId: text("user_id").primaryKey(),
+  userId: text("user_id").notNull(),
   provider: text("provider").notNull(),
+  apiFormat: text("api_format").notNull(),
+  baseUrl: text("base_url"),
+  model: text("model").notNull(),
+  reasoningEffort: text("reasoning_effort"),
   apiKeyCipher: text("api_key_cipher").notNull(),
   keyHint: text("key_hint").notNull(),
   connectedAt: text("connected_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.provider] }),
+]);
+
+export const aiPreferences = sqliteTable("ai_preferences", {
+  userId: text("user_id").primaryKey(),
+  activeProvider: text("active_provider"),
   updatedAt: text("updated_at").notNull(),
 });
 

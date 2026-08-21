@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { buildAnalysisMarkdown, splitForAnalysis } from "../lib/analysis-format.ts";
 import { SYSTEM_FRAMEWORK, validateFrameworkInput } from "../lib/frameworks.ts";
@@ -10,6 +11,37 @@ import { anonymousTokenHash, createAnonymousToken } from "../lib/anonymous-auth-
 import { buildCustomModelRequest, normalizeCustomBaseUrl, requestCustomModel } from "../lib/ai-provider.ts";
 import type { DeepseekAiRuntimeConfig } from "../lib/ai-provider.ts";
 import { HttpError } from "../lib/http-error.ts";
+
+test("defines multi-provider AI persistence and a data-preserving migration", async () => {
+  const schema = await readFile(new URL("../db/schema.ts", import.meta.url), "utf8");
+  assert.match(schema, /import \{[^}]*primaryKey/);
+  assert.match(schema, /export const aiPreferences = sqliteTable\("ai_preferences"/);
+  assert.match(schema, /primaryKey\(\{ columns: \[table\.userId, table\.provider\] \}\)/);
+  assert.match(schema, /apiFormat: text\("api_format"\)\.notNull\(\)/);
+  assert.match(schema, /baseUrl: text\("base_url"\)/);
+
+  const migration = await readFile(new URL("../drizzle/0006_custom_ai_providers.sql", import.meta.url), "utf8");
+  assert.match(migration, /INSERT INTO `__new_ai_settings`/);
+  assert.match(migration, /'deepseek'/);
+  assert.match(migration, /ADD `provider` text DEFAULT 'deepseek' NOT NULL/);
+  assert.match(migration, /ADD `api_format` text DEFAULT 'chat_completions' NOT NULL/);
+});
+
+test("uses provider-aware records, queries, and public analysis metadata", async () => {
+  const source = await readFile(new URL("../lib/db.ts", import.meta.url), "utf8");
+  assert.match(source, /provider: AiProvider;\s*api_format: AiApiFormat;/);
+  assert.match(source, /base_url: string \| null;\s*model: string;\s*reasoning_effort: ReasoningEffort \| null;/);
+  assert.match(source, /export type AiPreferenceRecord = \{\s*user_id: string;\s*active_provider: AiProvider \| null;/);
+  assert.match(source, /export async function getAiSettings\(userId: string\)/);
+  assert.match(source, /export async function getAiSetting\(userId: string, provider: AiProvider\)/);
+  assert.match(source, /ON CONFLICT\(user_id, provider\)/);
+  assert.match(source, /export async function getAiPreference\(userId: string\)/);
+  assert.match(source, /export async function setAiPreference\(userId: string, provider: AiProvider \| null\)/);
+  assert.match(source, /export async function deleteAiSetting\(userId: string, provider: AiProvider\)/);
+  assert.match(source, /PRAGMA table_info\(ai_settings\)/);
+  assert.match(source, /ALTER TABLE analysis_results ADD COLUMN provider TEXT NOT NULL DEFAULT 'deepseek'/);
+  assert.match(source, /provider: record\.provider,\s*apiFormat: record\.api_format/);
+});
 
 test("normalizes a safe custom API root", () => {
   assert.equal(normalizeCustomBaseUrl(" https://relay.example/v1/ "), "https://relay.example/v1");

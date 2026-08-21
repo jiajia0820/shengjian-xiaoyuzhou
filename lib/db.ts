@@ -1,4 +1,5 @@
 import { getRuntimeEnv } from "./runtime";
+import type { AiApiFormat, AiProvider, ReasoningEffort } from "./ai-provider";
 
 export type ConnectionRecord = {
   user_id: string;
@@ -49,16 +50,28 @@ export type AnalysisRecord = {
   source_type: "original" | "current";
   source_hash: string;
   model: string;
+  provider: AiProvider;
+  api_format: AiApiFormat;
   result_key: string;
   generated_at: string;
 };
 
 export type AiSettingRecord = {
   user_id: string;
-  provider: "deepseek";
+  provider: AiProvider;
+  api_format: AiApiFormat;
+  base_url: string | null;
+  model: string;
+  reasoning_effort: ReasoningEffort | null;
   api_key_cipher: string;
   key_hint: string;
   connected_at: string;
+  updated_at: string;
+};
+
+export type AiPreferenceRecord = {
+  user_id: string;
+  active_provider: AiProvider | null;
   updated_at: string;
 };
 
@@ -147,15 +160,27 @@ export async function ensureSchema(): Promise<void> {
       source_type TEXT NOT NULL,
       source_hash TEXT NOT NULL,
       model TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      api_format TEXT NOT NULL,
       result_key TEXT NOT NULL,
       generated_at TEXT NOT NULL
     )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS ai_settings (
-      user_id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
       provider TEXT NOT NULL,
+      api_format TEXT NOT NULL,
+      base_url TEXT,
+      model TEXT NOT NULL,
+      reasoning_effort TEXT,
       api_key_cipher TEXT NOT NULL,
       key_hint TEXT NOT NULL,
       connected_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, provider)
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS ai_preferences (
+      user_id TEXT PRIMARY KEY NOT NULL,
+      active_provider TEXT,
       updated_at TEXT NOT NULL
     )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS app_users (
@@ -227,9 +252,45 @@ export async function ensureSchema(): Promise<void> {
     "INSERT OR IGNORE INTO app_state (key, value, updated_at) VALUES ('bootstrap', 'open', ?)",
   ).bind(new Date().toISOString()).run();
 
-  const columns = await db.prepare("PRAGMA table_info(episodes)").all<{ name: string }>();
-  if (!columns.results.some((column) => column.name === "original_hash")) {
+  const episodeColumns = await db.prepare("PRAGMA table_info(episodes)").all<{ name: string }>();
+  if (!episodeColumns.results.some((column) => column.name === "original_hash")) {
     await db.prepare("ALTER TABLE episodes ADD COLUMN original_hash TEXT NOT NULL DEFAULT ''").run();
+  }
+
+  const aiSettingColumns = await db.prepare("PRAGMA table_info(ai_settings)").all<{ name: string }>();
+  if (!aiSettingColumns.results.some((column) => column.name === "api_format")) {
+    await db.batch([
+      db.prepare(`CREATE TABLE __new_ai_settings (
+        user_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        api_format TEXT NOT NULL,
+        base_url TEXT,
+        model TEXT NOT NULL,
+        reasoning_effort TEXT,
+        api_key_cipher TEXT NOT NULL,
+        key_hint TEXT NOT NULL,
+        connected_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, provider)
+      )`),
+      db.prepare(`INSERT INTO __new_ai_settings
+        (user_id, provider, api_format, base_url, model, reasoning_effort, api_key_cipher, key_hint, connected_at, updated_at)
+        SELECT user_id, 'deepseek', 'chat_completions', NULL, 'deepseek-v4-flash', NULL,
+          api_key_cipher, key_hint, connected_at, updated_at
+        FROM ai_settings`),
+      db.prepare("DROP TABLE ai_settings"),
+      db.prepare("ALTER TABLE __new_ai_settings RENAME TO ai_settings"),
+      db.prepare(`INSERT OR IGNORE INTO ai_preferences (user_id, active_provider, updated_at)
+        SELECT user_id, 'deepseek', updated_at FROM ai_settings`),
+    ]);
+  }
+
+  const analysisResultColumns = await db.prepare("PRAGMA table_info(analysis_results)").all<{ name: string }>();
+  if (!analysisResultColumns.results.some((column) => column.name === "provider")) {
+    await db.prepare("ALTER TABLE analysis_results ADD COLUMN provider TEXT NOT NULL DEFAULT 'deepseek'").run();
+  }
+  if (!analysisResultColumns.results.some((column) => column.name === "api_format")) {
+    await db.prepare("ALTER TABLE analysis_results ADD COLUMN api_format TEXT NOT NULL DEFAULT 'chat_completions'").run();
   }
   schemaReady = true;
 }
@@ -376,8 +437,8 @@ export async function upsertAnalysisResult(record: Omit<AnalysisRecord, "id">): 
   await ensureSchema();
   await getRuntimeEnv().DB.prepare(`INSERT INTO analysis_results
     (user_id, eid, slot, kind, framework_id, framework_name, framework_snapshot,
-     source_type, source_hash, model, result_key, generated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     source_type, source_hash, model, provider, api_format, result_key, generated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, eid, slot) DO UPDATE SET
       kind = excluded.kind,
       framework_id = excluded.framework_id,
@@ -386,36 +447,78 @@ export async function upsertAnalysisResult(record: Omit<AnalysisRecord, "id">): 
       source_type = excluded.source_type,
       source_hash = excluded.source_hash,
       model = excluded.model,
+      provider = excluded.provider,
+      api_format = excluded.api_format,
       result_key = excluded.result_key,
       generated_at = excluded.generated_at`)
     .bind(record.user_id, record.eid, record.slot, record.kind, record.framework_id,
       record.framework_name, record.framework_snapshot, record.source_type, record.source_hash,
-      record.model, record.result_key, record.generated_at).run();
+      record.model, record.provider, record.api_format, record.result_key, record.generated_at).run();
 }
 
-export async function getAiSetting(userId: string): Promise<AiSettingRecord | null> {
+export async function getAiSettings(userId: string): Promise<AiSettingRecord[]> {
   await ensureSchema();
-  return getRuntimeEnv().DB.prepare("SELECT * FROM ai_settings WHERE user_id = ?")
-    .bind(userId).first<AiSettingRecord>();
+  const result = await getRuntimeEnv().DB.prepare(
+    "SELECT * FROM ai_settings WHERE user_id = ? ORDER BY provider",
+  ).bind(userId).all<AiSettingRecord>();
+  return result.results;
+}
+
+export async function getAiSetting(userId: string, provider: AiProvider): Promise<AiSettingRecord | null> {
+  await ensureSchema();
+  return getRuntimeEnv().DB.prepare("SELECT * FROM ai_settings WHERE user_id = ? AND provider = ?")
+    .bind(userId, provider).first<AiSettingRecord>();
 }
 
 export async function saveAiSetting(record: AiSettingRecord): Promise<void> {
   await ensureSchema();
   await getRuntimeEnv().DB.prepare(`INSERT INTO ai_settings
-    (user_id, provider, api_key_cipher, key_hint, connected_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      provider = excluded.provider,
+    (user_id, provider, api_format, base_url, model, reasoning_effort, api_key_cipher, key_hint, connected_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, provider) DO UPDATE SET
+      api_format = excluded.api_format,
+      base_url = excluded.base_url,
+      model = excluded.model,
+      reasoning_effort = excluded.reasoning_effort,
       api_key_cipher = excluded.api_key_cipher,
       key_hint = excluded.key_hint,
       updated_at = excluded.updated_at`)
-    .bind(record.user_id, record.provider, record.api_key_cipher, record.key_hint,
-      record.connected_at, record.updated_at).run();
+    .bind(record.user_id, record.provider, record.api_format, record.base_url, record.model,
+      record.reasoning_effort, record.api_key_cipher, record.key_hint, record.connected_at, record.updated_at).run();
 }
 
-export async function deleteAiSetting(userId: string): Promise<void> {
+export async function getAiPreference(userId: string): Promise<AiPreferenceRecord | null> {
   await ensureSchema();
-  await getRuntimeEnv().DB.prepare("DELETE FROM ai_settings WHERE user_id = ?").bind(userId).run();
+  return getRuntimeEnv().DB.prepare("SELECT * FROM ai_preferences WHERE user_id = ?")
+    .bind(userId).first<AiPreferenceRecord>();
+}
+
+export async function setAiPreference(userId: string, provider: AiProvider | null): Promise<void> {
+  await ensureSchema();
+  const updatedAt = new Date().toISOString();
+  await getRuntimeEnv().DB.prepare(`INSERT INTO ai_preferences
+    (user_id, active_provider, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      active_provider = excluded.active_provider,
+      updated_at = excluded.updated_at`)
+    .bind(userId, provider, updatedAt).run();
+}
+
+export async function deleteAiSetting(userId: string, provider: AiProvider): Promise<void> {
+  await ensureSchema();
+  const db = getRuntimeEnv().DB;
+  await db.batch([
+    db.prepare(`UPDATE ai_preferences
+      SET active_provider = (
+        SELECT provider FROM ai_settings
+        WHERE user_id = ? AND provider <> ?
+        ORDER BY provider
+        LIMIT 1
+      ), updated_at = ?
+      WHERE user_id = ? AND active_provider = ?`)
+      .bind(userId, provider, new Date().toISOString(), userId, provider),
+    db.prepare("DELETE FROM ai_settings WHERE user_id = ? AND provider = ?").bind(userId, provider),
+  ]);
 }
 
 export async function getAppUser(userId: string): Promise<AppUserRecord | null> {
@@ -651,6 +754,7 @@ export async function deleteAllUserRecords(userId: string): Promise<void> {
     db.prepare("DELETE FROM episodes WHERE user_id = ?").bind(userId),
     db.prepare("DELETE FROM analysis_frameworks WHERE user_id = ?").bind(userId),
     db.prepare("DELETE FROM analysis_results WHERE user_id = ?").bind(userId),
+    db.prepare("DELETE FROM ai_preferences WHERE user_id = ?").bind(userId),
     db.prepare("DELETE FROM ai_settings WHERE user_id = ?").bind(userId),
     db.prepare("DELETE FROM usage_counters WHERE user_id = ?").bind(userId),
     db.prepare("DELETE FROM analysis_leases WHERE user_id = ?").bind(userId),
@@ -694,6 +798,8 @@ export function publicAnalysis(record: AnalysisRecord, episode: EpisodeRecord) {
     sourceType: record.source_type,
     sourceHash: record.source_hash,
     model: record.model,
+    provider: record.provider,
+    apiFormat: record.api_format,
     generatedAt: record.generated_at,
     stale: !currentHash || currentHash !== record.source_hash,
   };
