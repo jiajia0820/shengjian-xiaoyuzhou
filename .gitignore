@@ -43,3 +43,6 @@ yarn-error.log*
 
 # local design companion
 /.superpowers/
+
+# local implementation worktrees
+/.worktrees/
