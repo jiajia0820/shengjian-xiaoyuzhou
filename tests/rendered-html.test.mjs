@@ -84,11 +84,17 @@ test("supports permanent episode deletion and inventory release", async () => {
   assert.match(workspace, /释放 1 个文稿库存名额/);
 });
 
-test("always prioritizes the two-step setup guide without showing email login", async () => {
+test("keeps the provider-neutral two-step setup guide and safe dual-provider settings", async () => {
   const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
   assert.match(workspace, /进入声笺前，确认两项连接/);
   assert.match(workspace, /<h3>连接小宇宙<\/h3>/);
-  assert.match(workspace, /<h3>设置 DeepSeek<\/h3>/);
+  assert.match(workspace, /<h3>设置 AI 提供商<\/h3>/);
+  assert.match(workspace, /AI 提供商设置/);
+  assert.match(workspace, /自定义 API/);
+  assert.match(workspace, /Codex 中转预设/);
+  assert.match(workspace, /gpt-5\.6-luna/);
+  assert.match(workspace, /Base URL 与 Key 仍须手动填写/);
+  assert.doesNotMatch(workspace, /direct-api\.lvjiayang\.xyz/);
   assert.match(workspace, /const \[setupGuideOpen, setSetupGuideOpen\] = useState\(true\)/);
   assert.doesNotMatch(workspace, /setSetupGuideOpen\(!status\.connected \|\| !aiStatus\.connected\)/);
   assert.doesNotMatch(workspace, /邮箱登录待配置|绑定独立邮箱/);

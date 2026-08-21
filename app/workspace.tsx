@@ -4,8 +4,21 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, downloadWithAuth, type Viewer } from "@/lib/auth-client";
 
 type AccountStatus = { connected: boolean; phoneHint: string | null; connectedAt: string | null; displayName: string };
-type AiStatus = {
-  connected: boolean; provider: "deepseek"; model: string; keyHint: string | null; connectedAt: string | null;
+type AiProvider = "deepseek" | "custom";
+type ReasoningEffort = "low" | "medium" | "high";
+type AiSettingsStatus = {
+  defaultProvider: AiProvider | null;
+  providers: {
+    deepseek: {
+      provider: "deepseek"; connected: boolean; model: "deepseek-v4-flash"; apiFormat: "chat_completions";
+      keyHint: string | null; connectedAt: string | null;
+    };
+    custom: {
+      provider: "custom"; connected: boolean; baseUrl: string | null; model: string | null;
+      apiFormat: "responses" | "chat_completions" | null; reasoningEffort: ReasoningEffort | null;
+      keyHint: string | null; connectedAt: string | null;
+    };
+  };
 };
 type Episode = {
   eid: string; sourceUrl: string; title: string; podcastTitle: string; publishedAt: string | null;
@@ -73,8 +86,12 @@ export default function Workspace({
   onDeleteAccount: () => void;
 }) {
   const [account, setAccount] = useState<AccountStatus | null>(null);
-  const [aiSettings, setAiSettings] = useState<AiStatus>({
-    connected: false, provider: "deepseek", model: "deepseek-v4-flash", keyHint: null, connectedAt: null,
+  const [aiSettings, setAiSettings] = useState<AiSettingsStatus>({
+    defaultProvider: null,
+    providers: {
+      deepseek: { provider: "deepseek", connected: false, model: "deepseek-v4-flash", apiFormat: "chat_completions", keyHint: null, connectedAt: null },
+      custom: { provider: "custom", connected: false, baseUrl: null, model: null, apiFormat: null, reasoningEffort: null, keyHint: null, connectedAt: null },
+    },
   });
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [systemFramework, setSystemFramework] = useState<Framework>(FALLBACK_SYSTEM_FRAMEWORK);
@@ -110,7 +127,20 @@ export default function Workspace({
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [setupGuideOpen, setSetupGuideOpen] = useState(true);
   const [deepseekApiKey, setDeepseekApiKey] = useState("");
+  const [customBaseUrl, setCustomBaseUrl] = useState("");
+  const [customApiKey, setCustomApiKey] = useState("");
+  const [customModel, setCustomModel] = useState("");
+  const [customApiFormat, setCustomApiFormat] = useState<"responses" | "chat_completions">("responses");
+  const [customReasoningEffort, setCustomReasoningEffort] = useState<ReasoningEffort>("medium");
   const [aiSaving, setAiSaving] = useState(false);
+
+  const applyAiSettings = useCallback((status: AiSettingsStatus) => {
+    setAiSettings(status);
+    setCustomBaseUrl(status.providers.custom.baseUrl ?? "");
+    setCustomModel(status.providers.custom.model ?? "");
+    setCustomApiFormat(status.providers.custom.apiFormat ?? "responses");
+    setCustomReasoningEffort(status.providers.custom.reasoningEffort ?? "medium");
+  }, []);
 
   const loadEpisodes = useCallback(async () => {
     const data = await responseJson<{ episodes: Episode[] }>(await apiFetch("/api/episodes", { cache: "no-store" }));
@@ -126,10 +156,10 @@ export default function Workspace({
   }, []);
 
   const loadAiSettings = useCallback(async () => {
-    const data = await responseJson<AiStatus>(await apiFetch("/api/ai-settings", { cache: "no-store" }));
-    setAiSettings(data);
+    const data = await responseJson<AiSettingsStatus>(await apiFetch("/api/ai-settings", { cache: "no-store" }));
+    applyAiSettings(data);
     return data;
-  }, []);
+  }, [applyAiSettings]);
 
   const loadInitial = useCallback(async () => {
     setLoading(true);
@@ -198,7 +228,7 @@ export default function Workspace({
       setAccount(status);
       setConnectOpen(false);
       setCode("");
-      if (!aiSettings.connected) setSetupGuideOpen(true);
+      if (!aiSettings.defaultProvider) setSetupGuideOpen(true);
       setNotice({ kind: "success", text: "小宇宙账号已连接" });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "连接失败" });
@@ -391,9 +421,9 @@ export default function Workspace({
 
   async function generateAnalysis() {
     if (!selected || documentTab === "transcript") return;
-    if (!aiSettings.connected) {
+    if (!Boolean(aiSettings.defaultProvider)) {
       setAiModalOpen(true);
-      setNotice({ kind: "info", text: "请先填写 DeepSeek API Key，再开始生成" });
+      setNotice({ kind: "info", text: "请先设置 AI 提供商" });
       return;
     }
     if (selectedAnalysis && !window.confirm("重新生成会覆盖这份旧结果，确定继续吗？")) return;
@@ -463,18 +493,17 @@ export default function Workspace({
     }
   }
 
-  async function saveAiSettings(event: FormEvent) {
+  async function saveDeepseekSettings(event: FormEvent) {
     event.preventDefault();
     setAiSaving(true);
     try {
-      const status = await responseJson<AiStatus>(await apiFetch("/api/ai-settings", {
+      const status = await responseJson<AiSettingsStatus>(await apiFetch("/api/ai-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: deepseekApiKey }),
+        body: JSON.stringify({ provider: "deepseek", apiKey: deepseekApiKey }),
       }));
-      setAiSettings(status);
+      applyAiSettings(status);
       setDeepseekApiKey("");
-      setAiModalOpen(false);
       if (!account?.connected) setSetupGuideOpen(true);
       setNotice({ kind: "success", text: "DeepSeek 已连接，可以开始生成内容梳理和学习 Prompt" });
     } catch (error) {
@@ -484,21 +513,63 @@ export default function Workspace({
     }
   }
 
-  async function disconnectAi() {
-    if (!window.confirm("确认删除已保存的 DeepSeek API Key？历史分析结果不会删除。")) return;
+  async function saveCustomSettings(event: FormEvent) {
+    event.preventDefault();
     setAiSaving(true);
     try {
-      const status = await responseJson<AiStatus>(await apiFetch("/api/ai-settings", { method: "DELETE" }));
-      setAiSettings(status);
-      setDeepseekApiKey("");
-      setAiModalOpen(false);
-      setNotice({ kind: "success", text: "已删除 DeepSeek API Key" });
+      const status = await responseJson<AiSettingsStatus>(await apiFetch("/api/ai-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "custom", apiKey: customApiKey, baseUrl: customBaseUrl, model: customModel,
+          apiFormat: customApiFormat, reasoningEffort: customApiFormat === "responses" ? customReasoningEffort : null,
+        }),
+      }));
+      applyAiSettings(status);
+      setCustomApiKey("");
+      if (!account?.connected) setSetupGuideOpen(true);
+      setNotice({ kind: "success", text: "自定义 API 已连接，可以开始生成内容梳理和学习 Prompt" });
     } catch (error) {
-      setNotice({ kind: "error", text: error instanceof Error ? error.message : "删除 DeepSeek 设置失败" });
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "自定义 API 设置保存失败" });
     } finally {
       setAiSaving(false);
     }
   }
+
+  async function setDefaultAiProvider(provider: AiProvider) {
+    setAiSaving(true);
+    try {
+      const status = await responseJson<AiSettingsStatus>(await apiFetch("/api/ai-settings", {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }),
+      }));
+      applyAiSettings(status);
+      setNotice({ kind: "success", text: `${provider === "deepseek" ? "DeepSeek" : "自定义 API"} 已设为默认提供商` });
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "设置默认 AI 提供商失败" });
+    } finally {
+      setAiSaving(false);
+    }
+  }
+
+  async function disconnectAi(provider: AiProvider) {
+    const providerName = provider === "deepseek" ? "DeepSeek" : "自定义 API";
+    if (!window.confirm(`确认删除已保存的 ${providerName} 配置？历史分析结果不会删除。`)) return;
+    setAiSaving(true);
+    try {
+      const status = await responseJson<AiSettingsStatus>(await apiFetch(`/api/ai-settings?provider=${provider}`, { method: "DELETE" }));
+      applyAiSettings(status);
+      if (provider === "deepseek") setDeepseekApiKey("");
+      else setCustomApiKey("");
+      setNotice({ kind: "success", text: `已删除 ${providerName} 配置` });
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : `删除 ${providerName} 设置失败` });
+    } finally {
+      setAiSaving(false);
+    }
+  }
+
+  const defaultProviderStatus = aiSettings.defaultProvider ? aiSettings.providers[aiSettings.defaultProvider] : null;
+  const defaultProviderName = aiSettings.defaultProvider === "deepseek" ? "DeepSeek" : "自定义 API";
 
   return (
     <main className="site-shell">
@@ -508,8 +579,10 @@ export default function Workspace({
         </a>
         <div className="header-actions">
           <button className="account-chip ai-chip" type="button" onClick={() => setAiModalOpen(true)}>
-            <span className={aiSettings.connected ? "online-dot" : "offline-dot"} />
-            {aiSettings.connected ? `DeepSeek ${aiSettings.keyHint}` : "设置 DeepSeek"}
+            <span className={defaultProviderStatus ? "online-dot" : "offline-dot"} />
+            {defaultProviderStatus
+              ? `${defaultProviderName} · ${defaultProviderStatus.model} · ${defaultProviderStatus.keyHint ?? "已连接"}`
+              : "设置 AI 提供商"}
           </button>
           {account?.connected ? (
             <button className="account-chip" type="button" onClick={() => void disconnectAccount()} title="点击断开账号">
@@ -651,13 +724,13 @@ export default function Workspace({
                   setConnectOpen(true);
                 }}>{loading ? "检查中…" : account?.connected ? "已连接" : "连接账号"}</button>
               </article>
-              <article className={aiSettings.connected ? "complete" : ""}>
+              <article className={aiSettings.defaultProvider ? "complete" : ""}>
                 <span className="setup-step-no">02</span>
-                <div><h3>设置 DeepSeek</h3><p>填写自己的 API Key，用于生成内容梳理和学习 Prompt。</p></div>
-                <button type="button" disabled={loading || aiSettings.connected} onClick={() => {
+                <div><h3>设置 AI 提供商</h3><p>连接 DeepSeek 或自定义 API，用于生成内容梳理和学习 Prompt。</p></div>
+                <button type="button" disabled={loading || Boolean(aiSettings.defaultProvider)} onClick={() => {
                   setSetupGuideOpen(false);
                   setAiModalOpen(true);
-                }}>{loading ? "检查中…" : aiSettings.connected ? "已连接" : "填写 Key"}</button>
+                }}>{loading ? "检查中…" : aiSettings.defaultProvider ? "已连接" : "去设置"}</button>
               </article>
             </div>
             <button className="text-action setup-later" type="button" onClick={() => setSetupGuideOpen(false)}>稍后再设置</button>
@@ -694,31 +767,106 @@ export default function Workspace({
 
       {aiModalOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setAiModalOpen(false)}>
-          <form className="connect-modal ai-modal" role="dialog" aria-modal="true" aria-labelledby="ai-settings-title"
-            onSubmit={(event) => void saveAiSettings(event)}>
+          <section className="connect-modal ai-modal" role="dialog" aria-modal="true" aria-labelledby="ai-settings-title">
             <button className="modal-close" type="button" onClick={() => setAiModalOpen(false)} aria-label="关闭">×</button>
             <span className="modal-kicker">AI PROVIDER</span>
-            <h2 id="ai-settings-title">连接 DeepSeek</h2>
-            <p>生成时，所选文稿和梳理框架会发送给 DeepSeek。Key 仅提交一次，并在服务端使用 AES-GCM 加密保存。</p>
-            <div className="ai-provider-card">
-              <div><strong>DeepSeek</strong><small>{aiSettings.model}</small></div>
-              <span className={aiSettings.connected ? "connected" : ""}>{aiSettings.connected ? `已连接 ${aiSettings.keyHint}` : "未连接"}</span>
+            <h2 id="ai-settings-title">AI 提供商设置</h2>
+            <p>生成时，所选文稿和梳理框架会发送给默认提供商。Key 仅提交一次，并在服务端使用 AES-GCM 加密保存。</p>
+            <div className="ai-provider-grid">
+              <form className="ai-provider-form" onSubmit={(event) => void saveDeepseekSettings(event)}>
+                <div className="ai-provider-card">
+                  <div><strong>DeepSeek</strong><small>{aiSettings.providers.deepseek.model} · 固定模型</small></div>
+                  <span className={aiSettings.providers.deepseek.connected ? "connected" : ""}>
+                    {aiSettings.providers.deepseek.connected ? `已连接 ${aiSettings.providers.deepseek.keyHint}` : "未连接"}
+                  </span>
+                </div>
+                {aiSettings.defaultProvider === "deepseek" && <span className="provider-default-chip">默认</span>}
+                <label className="code-input">
+                  <span>{aiSettings.providers.deepseek.connected ? "替换 API Key" : "DeepSeek API Key"}</span>
+                  <input type="password" autoComplete="new-password" value={deepseekApiKey}
+                    onChange={(event) => setDeepseekApiKey(event.target.value)} placeholder="sk-…" />
+                </label>
+                <button className="primary-action" type="submit" disabled={aiSaving || !deepseekApiKey.trim()}>
+                  {aiSaving ? "保存中…" : aiSettings.providers.deepseek.connected ? "保存新 Key" : "加密保存并连接"}
+                </button>
+                {aiSettings.providers.deepseek.connected && (
+                  <div className="provider-default-action">
+                    <button type="button" disabled={aiSaving || aiSettings.defaultProvider === "deepseek"}
+                      onClick={() => void setDefaultAiProvider("deepseek")}>
+                      {aiSettings.defaultProvider === "deepseek" ? "当前默认提供商" : "设为默认"}
+                    </button>
+                    <button className="danger-text-action" type="button" disabled={aiSaving} onClick={() => void disconnectAi("deepseek")}>
+                      删除已保存的 Key
+                    </button>
+                  </div>
+                )}
+                <small>网站不会显示、下载或记录完整 Key。请确认 DeepSeek 账户余额充足后再生成。</small>
+              </form>
+
+              <form className="ai-provider-form" onSubmit={(event) => void saveCustomSettings(event)}>
+                <div className="ai-provider-card">
+                  <div><strong>自定义 API</strong><small>{aiSettings.providers.custom.model ?? "填写模型 ID 后连接"}</small></div>
+                  <span className={aiSettings.providers.custom.connected ? "connected" : ""}>
+                    {aiSettings.providers.custom.connected ? `已连接 ${aiSettings.providers.custom.keyHint}` : "未连接"}
+                  </span>
+                </div>
+                {aiSettings.defaultProvider === "custom" && <span className="provider-default-chip">默认</span>}
+                <button className="preset-action" type="button" onClick={() => {
+                  setCustomModel("gpt-5.6-luna");
+                  setCustomApiFormat("responses");
+                  setCustomReasoningEffort("medium");
+                }}>Codex 中转预设</button>
+                <small className="preset-note">Base URL 与 Key 仍须手动填写。</small>
+                <div className="provider-field-row">
+                  <label>
+                    <span>Base URL</span>
+                    <input type="url" autoComplete="url" value={customBaseUrl} onChange={(event) => setCustomBaseUrl(event.target.value)} placeholder="输入服务地址" />
+                  </label>
+                  <label>
+                    <span>模型 ID</span>
+                    <input autoComplete="off" value={customModel} onChange={(event) => setCustomModel(event.target.value)} placeholder="例如：your-model" />
+                  </label>
+                </div>
+                <label className="code-input">
+                  <span>{aiSettings.providers.custom.connected ? "替换 API Key" : "API Key"}</span>
+                  <input type="password" autoComplete="new-password" value={customApiKey}
+                    onChange={(event) => setCustomApiKey(event.target.value)} placeholder="输入 API Key" />
+                </label>
+                <div className="provider-field-row">
+                  <label>
+                    <span>接口格式</span>
+                    <select value={customApiFormat} onChange={(event) => setCustomApiFormat(event.target.value as "responses" | "chat_completions")}>
+                      <option value="responses">Responses（支持推理强度）</option>
+                      <option value="chat_completions">Chat Completions（兼容格式）</option>
+                    </select>
+                  </label>
+                  {customApiFormat === "responses" && (
+                    <label>
+                      <span>推理强度</span>
+                      <select value={customReasoningEffort} onChange={(event) => setCustomReasoningEffort(event.target.value as ReasoningEffort)}>
+                        <option value="low">低</option><option value="medium">中</option><option value="high">高</option>
+                      </select>
+                    </label>
+                  )}
+                </div>
+                <button className="primary-action" type="submit" disabled={aiSaving || !customApiKey.trim() || !customBaseUrl.trim() || !customModel.trim()}>
+                  {aiSaving ? "保存中…" : aiSettings.providers.custom.connected ? "保存并替换配置" : "加密保存并连接"}
+                </button>
+                {aiSettings.providers.custom.connected && (
+                  <div className="provider-default-action">
+                    <button type="button" disabled={aiSaving || aiSettings.defaultProvider === "custom"}
+                      onClick={() => void setDefaultAiProvider("custom")}>
+                      {aiSettings.defaultProvider === "custom" ? "当前默认提供商" : "设为默认"}
+                    </button>
+                    <button className="danger-text-action" type="button" disabled={aiSaving} onClick={() => void disconnectAi("custom")}>
+                      删除自定义 API
+                    </button>
+                  </div>
+                )}
+                <small>请使用你有权访问的服务地址与 Key；网站不会显示、下载或记录完整 Key。</small>
+              </form>
             </div>
-            <label className="code-input">
-              <span>{aiSettings.connected ? "替换 API Key" : "API Key"}</span>
-              <input type="password" autoComplete="new-password" value={deepseekApiKey}
-                onChange={(event) => setDeepseekApiKey(event.target.value)} placeholder="sk-…" />
-            </label>
-            <button className="primary-action" type="submit" disabled={aiSaving || !deepseekApiKey.trim()}>
-              {aiSaving ? "保存中…" : aiSettings.connected ? "保存新 Key" : "加密保存并连接"}
-            </button>
-            {aiSettings.connected && (
-              <button className="danger-text-action" type="button" disabled={aiSaving} onClick={() => void disconnectAi()}>
-                删除已保存的 Key
-              </button>
-            )}
-            <small>网站不会显示、下载或记录完整 Key。请确认 DeepSeek 账户余额充足后再生成。</small>
-          </form>
+          </section>
         </div>
       )}
 
