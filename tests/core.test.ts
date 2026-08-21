@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { buildAnalysisMarkdown, splitForAnalysis } from "../lib/analysis-format.ts";
 import { SYSTEM_FRAMEWORK, validateFrameworkInput } from "../lib/frameworks.ts";
@@ -12,6 +14,141 @@ import { buildCustomModelRequest, normalizeCustomBaseUrl, requestCustomModel } f
 import type { DeepseekAiRuntimeConfig } from "../lib/ai-provider.ts";
 import { HttpError } from "../lib/http-error.ts";
 
+type SqliteRow = Record<string, unknown>;
+
+class SqliteD1Statement {
+  private readonly database: DatabaseSync;
+  private readonly query: string;
+  private readonly values: unknown[];
+
+  constructor(
+    database: DatabaseSync,
+    query: string,
+    values: unknown[] = [],
+  ) {
+    this.database = database;
+    this.query = query;
+    this.values = values;
+  }
+
+  bind(...values: unknown[]) {
+    return new SqliteD1Statement(this.database, this.query, values);
+  }
+
+  async run() {
+    const result = this.database.prepare(this.query).run(...this.values) as { changes?: number | bigint };
+    return { meta: { changes: Number(result.changes ?? 0) } };
+  }
+
+  async first<T>(): Promise<T | null> {
+    const row = this.database.prepare(this.query).get(...this.values) as SqliteRow | undefined;
+    return row ? Object.fromEntries(Object.entries(row)) as T : null;
+  }
+
+  async all<T>(): Promise<{ results: T[] }> {
+    const rows = this.database.prepare(this.query).all(...this.values) as SqliteRow[];
+    return { results: rows.map((row) => Object.fromEntries(Object.entries(row)) as T) };
+  }
+}
+
+class SqliteD1Database {
+  private readonly database: DatabaseSync;
+
+  constructor(database: DatabaseSync) {
+    this.database = database;
+  }
+
+  prepare(query: string) {
+    return new SqliteD1Statement(this.database, query);
+  }
+
+  async batch(statements: SqliteD1Statement[]) {
+    this.database.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.database.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+}
+
+declare global {
+  var __aiProviderTestEnv: { DB: SqliteD1Database } | undefined;
+}
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === "cloudflare:workers") {
+      return {
+        shortCircuit: true,
+        url: "data:text/javascript,export const env = globalThis.__aiProviderTestEnv;",
+      };
+    }
+    if (specifier.startsWith(".") && !/\.[cm]?[jt]sx?$/.test(specifier)) {
+      return nextResolve(`${specifier}.ts`, context);
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
+function createLegacyAiDatabase(): DatabaseSync {
+  const database = new DatabaseSync(":memory:");
+  database.exec(`CREATE TABLE ai_settings (
+    user_id TEXT PRIMARY KEY NOT NULL,
+    provider TEXT NOT NULL,
+    api_key_cipher TEXT NOT NULL,
+    key_hint TEXT NOT NULL,
+    connected_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE analysis_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    eid TEXT NOT NULL,
+    slot TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    framework_id TEXT,
+    framework_name TEXT,
+    framework_snapshot TEXT,
+    source_type TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    result_key TEXT NOT NULL,
+    generated_at TEXT NOT NULL
+  );
+  CREATE TABLE app_state (
+    key TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );`);
+  database.prepare(`INSERT INTO ai_settings
+    (user_id, provider, api_key_cipher, key_hint, connected_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .run("owner", "deepseek", "legacy-cipher", "•••• 1234", "2026-01-02T00:00:00.000Z", "2026-01-03T00:00:00.000Z");
+  database.prepare(`INSERT INTO analysis_results
+    (user_id, eid, slot, kind, framework_id, framework_name, framework_snapshot,
+     source_type, source_hash, model, result_key, generated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run("owner", "episode", "summary", "summary", null, null, null,
+      "current", "legacy-hash", "deepseek-v4-flash", "legacy-result", "2026-01-03T00:00:00.000Z");
+  return database;
+}
+
+function applyCustomAiMigration(database: DatabaseSync, migration: string) {
+  for (const statement of migration.split("--> statement-breakpoint").map((part) => part.trim()).filter(Boolean)) {
+    database.exec(statement);
+  }
+}
+
+function row<T extends SqliteRow>(database: DatabaseSync, query: string, ...values: unknown[]): T | null {
+  const value = database.prepare(query).get(...values) as SqliteRow | undefined;
+  return value ? Object.fromEntries(Object.entries(value)) as T : null;
+}
+
 test("defines multi-provider AI persistence and a data-preserving migration", async () => {
   const schema = await readFile(new URL("../db/schema.ts", import.meta.url), "utf8");
   assert.match(schema, /import \{[^}]*primaryKey/);
@@ -23,8 +160,11 @@ test("defines multi-provider AI persistence and a data-preserving migration", as
   const migration = await readFile(new URL("../drizzle/0006_custom_ai_providers.sql", import.meta.url), "utf8");
   assert.match(migration, /INSERT INTO `__new_ai_settings`/);
   assert.match(migration, /'deepseek'/);
-  assert.match(migration, /ADD `provider` text DEFAULT 'deepseek' NOT NULL/);
-  assert.match(migration, /ADD `api_format` text DEFAULT 'chat_completions' NOT NULL/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS `ai_settings_runtime`/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS `analysis_results_runtime`/);
+  assert.match(migration, /INSERT INTO `__new_analysis_results`/);
+  assert.match(migration, /DROP TABLE `ai_settings_runtime`/);
+  assert.match(migration, /DROP TABLE `analysis_results_runtime`/);
 });
 
 test("uses provider-aware records, queries, and public analysis metadata", async () => {
@@ -39,8 +179,68 @@ test("uses provider-aware records, queries, and public analysis metadata", async
   assert.match(source, /export async function setAiPreference\(userId: string, provider: AiProvider \| null\)/);
   assert.match(source, /export async function deleteAiSetting\(userId: string, provider: AiProvider\)/);
   assert.match(source, /PRAGMA table_info\(ai_settings\)/);
-  assert.match(source, /ALTER TABLE analysis_results ADD COLUMN provider TEXT NOT NULL DEFAULT 'deepseek'/);
+  assert.match(source, /ai_settings_runtime/);
+  assert.match(source, /analysis_results_runtime/);
+  assert.match(source, /ai_provider_schema/);
   assert.match(source, /provider: record\.provider,\s*apiFormat: record\.api_format/);
+});
+
+test("migrates legacy provider data in order without changing saved values", async () => {
+  const migration = await readFile(new URL("../drizzle/0006_custom_ai_providers.sql", import.meta.url), "utf8");
+  const database = createLegacyAiDatabase();
+  applyCustomAiMigration(database, migration);
+
+  assert.deepEqual(row(database, `SELECT user_id, provider, api_format, base_url, model, reasoning_effort,
+    api_key_cipher, key_hint, connected_at, updated_at FROM ai_settings`), {
+    user_id: "owner", provider: "deepseek", api_format: "chat_completions", base_url: null,
+    model: "deepseek-v4-flash", reasoning_effort: null, api_key_cipher: "legacy-cipher",
+    key_hint: "•••• 1234", connected_at: "2026-01-02T00:00:00.000Z", updated_at: "2026-01-03T00:00:00.000Z",
+  });
+  assert.deepEqual(row(database, "SELECT user_id, active_provider, updated_at FROM ai_preferences"), {
+    user_id: "owner", active_provider: "deepseek", updated_at: "2026-01-03T00:00:00.000Z",
+  });
+  assert.deepEqual(row(database, "SELECT provider, api_format FROM analysis_results WHERE id = 1"), {
+    provider: "deepseek", api_format: "chat_completions",
+  });
+});
+
+test("preserves runtime-staged custom settings, preference, and analysis when 0006 runs later", async () => {
+  const migration = await readFile(new URL("../drizzle/0006_custom_ai_providers.sql", import.meta.url), "utf8");
+  const database = createLegacyAiDatabase();
+  globalThis.__aiProviderTestEnv = { DB: new SqliteD1Database(database) };
+  const db = await import(`../lib/db.ts?runtime-migration-${crypto.randomUUID()}`);
+  await db.ensureSchema();
+  await db.saveAiSetting({
+    user_id: "owner", provider: "custom", api_format: "responses", base_url: "https://relay.example/v1",
+    model: "gpt-5.6-luna", reasoning_effort: "high", api_key_cipher: "custom-cipher", key_hint: "•••• 9876",
+    connected_at: "2026-02-01T00:00:00.000Z", updated_at: "2026-02-02T00:00:00.000Z",
+  });
+  await db.setAiPreference("owner", "custom");
+  await db.upsertAnalysisResult({
+    user_id: "owner", eid: "episode", slot: "summary", kind: "summary", framework_id: null,
+    framework_name: null, framework_snapshot: null, source_type: "current", source_hash: "custom-hash",
+    model: "gpt-5.6-luna", provider: "custom", api_format: "responses", result_key: "custom-result",
+    generated_at: "2026-02-02T00:00:00.000Z",
+  });
+
+  assert.doesNotThrow(() => applyCustomAiMigration(database, migration));
+  assert.deepEqual(database.prepare("SELECT provider FROM ai_settings WHERE user_id = ? ORDER BY provider")
+    .all("owner").map((value) => Object.fromEntries(Object.entries(value))), [
+      { provider: "custom" },
+      { provider: "deepseek" },
+    ]);
+  assert.deepEqual(row(database, "SELECT api_format, base_url, model, reasoning_effort, api_key_cipher, key_hint FROM ai_settings WHERE user_id = ? AND provider = ?", "owner", "custom"), {
+    api_format: "responses", base_url: "https://relay.example/v1", model: "gpt-5.6-luna",
+    reasoning_effort: "high", api_key_cipher: "custom-cipher", key_hint: "•••• 9876",
+  });
+  assert.deepEqual(row(database, "SELECT active_provider FROM ai_preferences WHERE user_id = ?", "owner"), {
+    active_provider: "custom",
+  });
+  assert.deepEqual(row(database, "SELECT provider, api_format, model, result_key FROM analysis_results WHERE id = 1"), {
+    provider: "custom", api_format: "responses", model: "gpt-5.6-luna", result_key: "custom-result",
+  });
+  assert.equal(row(database, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_settings_runtime'"), null);
+  assert.equal(row(database, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'analysis_results_runtime'"), null);
 });
 
 test("normalizes a safe custom API root", () => {
