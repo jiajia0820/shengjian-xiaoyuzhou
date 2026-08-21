@@ -78,6 +78,27 @@ class SqliteD1Database {
 
 declare global {
   var __aiProviderTestEnv: { DB: SqliteD1Database; TOKEN_ENCRYPTION_KEY?: string } | undefined;
+  var __analysisGenerateRouteTestDeps: Record<string, Record<string, unknown>> | undefined;
+}
+
+function routeMockModule(specifier: string): string | undefined {
+  const exports: Record<string, string> = {
+    "@/lib/analysis": "buildAnalysisMarkdown,generateAnalysisBody",
+    "@/lib/ai-settings": "readActiveAiConfiguration",
+    "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,getFramework,publicAnalysis,refundUsage,releaseAnalysisLease,setOriginalHash,upsertAnalysisResult",
+    "@/lib/documents": "analysisDocumentKey,putMarkdown,readMarkdown",
+    "@/lib/frameworks": "frameworkForAnalysis,SYSTEM_FRAMEWORK_ID",
+    "@/lib/security": "sha256Hex",
+    "@/lib/user": "apiError,HttpError,requireApiUser",
+  };
+  const names = exports[specifier];
+  if (!names) return undefined;
+  const source = names.split(",").map((name) => (
+    name === "HttpError" || name === "SYSTEM_FRAMEWORK_ID"
+      ? `export const ${name} = globalThis.__analysisGenerateRouteTestDeps[${JSON.stringify(specifier)}][${JSON.stringify(name)}];`
+      : `export const ${name} = (...args) => globalThis.__analysisGenerateRouteTestDeps[${JSON.stringify(specifier)}][${JSON.stringify(name)}](...args);`
+  )).join("\n");
+  return `data:text/javascript,${encodeURIComponent(source)}`;
 }
 
 registerHooks({
@@ -88,6 +109,8 @@ registerHooks({
         url: "data:text/javascript,export const env = globalThis.__aiProviderTestEnv;",
       };
     }
+    const mockUrl = routeMockModule(specifier);
+    if (mockUrl) return { shortCircuit: true, url: mockUrl };
     if (specifier.startsWith(".") && !/\.[cm]?[jt]sx?$/.test(specifier)) {
       return nextResolve(`${specifier}.ts`, context);
     }
@@ -842,6 +865,91 @@ test("adds server-owned frontmatter to AI Markdown", () => {
   assert.match(markdown, /model: "gpt-5.6-luna"/);
   assert.doesNotMatch(markdown, /relay\.example|relay-secret/);
   assert.match(markdown, /# 如何建立统计直觉｜内容梳理/);
+});
+
+test("keeps custom provider credentials out of generated analysis artifacts", async () => {
+  const sentinelBaseUrl = "https://relay.example/v1";
+  const sentinelApiKey = "relay-secret";
+  const config = {
+    provider: "custom" as const,
+    apiKey: sentinelApiKey,
+    baseUrl: sentinelBaseUrl,
+    model: "gpt-5.6-luna",
+    apiFormat: "responses" as const,
+    reasoningEffort: "high" as const,
+  };
+  const episode = {
+    id: 1, user_id: "owner", eid: "episode-id", source_url: "https://www.xiaoyuzhoufm.com/episode/episode-id",
+    title: "如何建立统计直觉", podcast_title: "样本播客", published_at: null, duration_seconds: 3600,
+    segment_count: 20, original_key: "original.md", current_key: "current.md", original_hash: "original",
+    content_hash: "current", created_at: "2026-08-15T00:00:00.000Z", updated_at: "2026-08-15T00:00:00.000Z",
+  };
+  let generatedConfig: unknown;
+  let storedMarkdown = "";
+  let storedRecord: Record<string, unknown> | undefined;
+  globalThis.__analysisGenerateRouteTestDeps = {
+    "@/lib/analysis": {
+      buildAnalysisMarkdown,
+      generateAnalysisBody: async ({ config: receivedConfig }: { config: unknown }) => {
+        generatedConfig = receivedConfig;
+        return "## 一句话主旨\n\n建立统计直觉。";
+      },
+    },
+    "@/lib/ai-settings": { readActiveAiConfiguration: async () => config },
+    "@/lib/db": {
+      acquireAnalysisLease: async () => "lease-id",
+      consumeUsage: async () => true,
+      getEpisodeRecord: async () => episode,
+      getFramework: async () => null,
+      publicAnalysis: (record: Record<string, unknown>) => ({
+        provider: record.provider, apiFormat: record.api_format, model: record.model,
+      }),
+      refundUsage: async () => undefined,
+      releaseAnalysisLease: async () => undefined,
+      setOriginalHash: async () => undefined,
+      upsertAnalysisResult: async (record: Record<string, unknown>) => { storedRecord = record; },
+    },
+    "@/lib/documents": {
+      analysisDocumentKey: async () => "analysis.md",
+      putMarkdown: async (_key: string, markdown: string) => { storedMarkdown = markdown; },
+      readMarkdown: async () => "播客文稿正文",
+    },
+    "@/lib/frameworks": {
+      frameworkForAnalysis: () => SYSTEM_FRAMEWORK,
+      SYSTEM_FRAMEWORK_ID: SYSTEM_FRAMEWORK.id,
+    },
+    "@/lib/security": { sha256Hex: async () => "source-hash" },
+    "@/lib/user": {
+      apiError: (error: unknown) => { throw error; },
+      HttpError,
+      requireApiUser: async () => ({ userId: "owner" }),
+    },
+  };
+  try {
+    const route = await import(`${new URL("../app/api/episodes/[eid]/analyses/generate/route.ts", import.meta.url).href}?secret-boundary=${crypto.randomUUID()}`);
+    const response = await route.POST(new Request("https://app.example/api/episodes/episode-id/analyses/generate", {
+      method: "POST",
+      body: JSON.stringify({ kind: "summary", source: "current" }),
+    }), { params: Promise.resolve({ eid: "episode-id" }) });
+    const payload = await response.json() as Record<string, unknown>;
+
+    assert.strictEqual(generatedConfig, config);
+    assert.ok(storedRecord);
+    assert.match(storedMarkdown, /provider: "custom"/);
+    assert.match(storedMarkdown, /api_format: "responses"/);
+    assert.match(storedMarkdown, /model: "gpt-5\.6-luna"/);
+    assert.deepEqual({
+      provider: storedRecord.provider,
+      apiFormat: storedRecord.api_format,
+      model: storedRecord.model,
+    }, { provider: "custom", apiFormat: "responses", model: "gpt-5.6-luna" });
+    assert.deepEqual(payload.result, { provider: "custom", apiFormat: "responses", model: "gpt-5.6-luna" });
+    for (const artifact of [storedMarkdown, JSON.stringify(storedRecord), JSON.stringify(payload)]) {
+      assert.doesNotMatch(artifact, /relay\.example|relay-secret/);
+    }
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+  }
 });
 
 test("builds secure same-origin cookies and rejects foreign origins", () => {
