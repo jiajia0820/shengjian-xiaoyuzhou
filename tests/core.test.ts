@@ -8,6 +8,7 @@ import { parseEpisodeUrl, XiaoyuzhouError } from "../lib/xiaoyuzhou.ts";
 import { isAllowedOrigin, parseCookieHeader, serializeCookie } from "../lib/request-security-core.ts";
 import { anonymousTokenHash, createAnonymousToken } from "../lib/anonymous-auth-core.ts";
 import { buildCustomModelRequest, normalizeCustomBaseUrl, requestCustomModel } from "../lib/ai-provider.ts";
+import type { DeepseekAiRuntimeConfig } from "../lib/ai-provider.ts";
 import { HttpError } from "../lib/http-error.ts";
 
 test("normalizes a safe custom API root", () => {
@@ -19,7 +20,9 @@ test("rejects unsafe custom API roots", () => {
     "http://relay.example/v1",
     "https://name:pass@relay.example/v1",
     "https://relay.example/v1?token=secret",
+    "https://relay.example/v1?",
     "https://relay.example/v1#fragment",
+    "https://relay.example/v1#",
     "https://127.0.0.1/v1",
     "https://[::1]/v1",
     "https://localhost/v1",
@@ -211,12 +214,17 @@ test("dispatches DeepSeek through its SDK configuration with thinking disabled",
   const aiProvider = await import("../lib/ai-provider.ts");
   assert.equal(typeof aiProvider.executeModelRequest, "function");
 
-  let clientOptions: unknown;
-  let modelRequest: unknown;
-  const response = await aiProvider.executeModelRequest({
+  const deepseekConfig = {
     provider: "deepseek",
     apiKey: "deepseek-key",
-  }, {
+    baseUrl: null,
+    model: "deepseek-v4-flash",
+    apiFormat: "chat_completions",
+    reasoningEffort: null,
+  } satisfies DeepseekAiRuntimeConfig;
+  let clientOptions: unknown;
+  let modelRequest: unknown;
+  const response = await aiProvider.executeModelRequest(deepseekConfig, {
     instructions: "system rules",
     input: "document",
     maxOutputTokens: 1600,

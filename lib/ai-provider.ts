@@ -22,6 +22,10 @@ export type CustomAiRuntimeConfig = {
 export type DeepseekAiRuntimeConfig = {
   provider: "deepseek";
   apiKey: string;
+  baseUrl: null;
+  model: "deepseek-v4-flash";
+  apiFormat: "chat_completions";
+  reasoningEffort: null;
 };
 
 export type AiRuntimeConfig = DeepseekAiRuntimeConfig | CustomAiRuntimeConfig;
@@ -34,7 +38,6 @@ export type ModelResponse = {
 };
 
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
-const DEEPSEEK_MODEL = "deepseek-v4-flash";
 const MODEL_TIMEOUT_MS = 120_000;
 
 type DeepseekClientOptions = {
@@ -69,7 +72,9 @@ export type ModelExecutionOptions = {
 
 export function normalizeCustomBaseUrl(value: string): string {
   const clean = value.trim();
-  if (!clean || clean.length > 2_048) throw new Error("INVALID_CUSTOM_BASE_URL");
+  if (!clean || clean.length > 2_048 || clean.includes("?") || clean.includes("#")) {
+    throw new Error("INVALID_CUSTOM_BASE_URL");
+  }
   const url = new URL(clean);
   const hostname = url.hostname.toLowerCase().replace(/\.+$/, "");
   const isIpv4 = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(hostname);
@@ -146,9 +151,12 @@ async function createDeepseekClient(options: DeepseekClientOptions): Promise<Dee
   return new OpenAI(options) as unknown as DeepseekClient;
 }
 
-function buildDeepseekModelRequest(request: ModelRequest): DeepseekRequest {
+function buildDeepseekModelRequest(
+  request: ModelRequest,
+  model: DeepseekAiRuntimeConfig["model"],
+): DeepseekRequest {
   return {
-    model: DEEPSEEK_MODEL,
+    model,
     messages: [
       { role: "system", content: request.instructions },
       { role: "user", content: request.input },
@@ -171,14 +179,14 @@ export async function requestDeepseekModel(
       timeout: MODEL_TIMEOUT_MS,
       maxRetries: 1,
     });
-    const response = await client.chat.completions.create(buildDeepseekModelRequest(request));
+    const response = await client.chat.completions.create(buildDeepseekModelRequest(request, config.model));
     const text = cleanModelMarkdown(chatCompletionText(response));
     if (!text) throw new HttpError(502, "AI_EMPTY_OUTPUT", "AI 没有返回可用内容，请稍后重试");
     return {
       text,
       provider: "deepseek",
-      apiFormat: "chat_completions",
-      model: DEEPSEEK_MODEL,
+      apiFormat: config.apiFormat,
+      model: config.model,
     };
   } catch (error) {
     if (error instanceof HttpError) throw error;
