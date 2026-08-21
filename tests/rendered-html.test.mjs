@@ -103,6 +103,57 @@ test("keeps the provider-neutral two-step setup guide and safe dual-provider set
   assert.doesNotMatch(workspace, /邮箱登录待配置|绑定独立邮箱/);
 });
 
+function functionBody(source, name) {
+  const match = source.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{([\\s\\S]*?)\\n  \\}`));
+  assert.ok(match, `${name} must be a named function`);
+  return match[1];
+}
+
+test("keeps server status refreshes from partially rolling back custom provider drafts", async () => {
+  const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
+  const refresh = workspace.match(/const applyAiSettings = useCallback\(\(status: AiSettingsStatus\) => \{([\s\S]*?)\n  \}, \[\]\);/)?.[1];
+  assert.ok(refresh, "AI status refresh must remain a separate callback");
+  assert.match(refresh, /^\s*setAiSettings\(status\);\s*$/);
+  assert.doesNotMatch(refresh, /setCustom(BaseUrl|ApiKey|Model|ApiFormat|ReasoningEffort)/);
+
+  const load = workspace.match(/const loadAiSettings = useCallback\(async \(\) => \{([\s\S]*?)\n  \}, \[applyAiSettings, syncCustomDraft\]\);/)?.[1];
+  assert.ok(load, "initial load must explicitly initialize the custom draft");
+  assert.match(load, /applyAiSettings\(data\);\s*syncCustomDraft\(data\.providers\.custom\);/);
+
+  const customSave = functionBody(workspace, "saveCustomSettings");
+  assert.match(customSave, /applyAiSettings\(status\);\s*syncCustomDraft\(status\.providers\.custom\);/);
+  for (const mutation of ["setDefaultAiProvider", "disconnectAi"]) {
+    assert.doesNotMatch(functionBody(workspace, mutation), /syncCustomDraft|setCustom(BaseUrl|ApiKey|Model|ApiFormat|ReasoningEffort)/);
+  }
+});
+
+test("clears unsubmitted keys on every AI modal close path", async () => {
+  const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
+  const close = functionBody(workspace, "closeAiModal");
+  assert.match(close, /^\s*setDeepseekApiKey\(""\);\s*setCustomApiKey\(""\);\s*setAiModalOpen\(false\);\s*$/);
+  assert.equal((workspace.match(/setAiModalOpen\(false\)/g) ?? []).length, 1);
+  assert.match(workspace, /onMouseDown=\{\(event\) => event\.target === event\.currentTarget && closeAiModal\(\)\}/);
+  assert.match(workspace, /onClick=\{closeAiModal\} aria-label="关闭"/);
+  assert.match(functionBody(workspace, "saveDeepseekSettings"), /closeAiModal\(\);/);
+  assert.match(functionBody(workspace, "saveCustomSettings"), /closeAiModal\(\);/);
+});
+
+test("keeps the long provider modal operable and provider names contained", async () => {
+  const [workspace, styles] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  const aiCloseRules = styles.match(/\.ai-modal \.modal-close \{[^}]*\}/g) ?? [];
+  assert.equal(aiCloseRules.length, 2);
+  for (const rule of aiCloseRules) assert.doesNotMatch(rule, /top:\s*-/);
+  assert.match(styles, /\.ai-provider-card > div \{[^}]*min-width:\s*0/);
+  assert.match(styles, /\.ai-provider-card small \{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(styles, /\.ai-chip \{[^}]*max-width:/);
+  assert.match(styles, /\.ai-chip-label \{[^}]*text-overflow:\s*ellipsis/);
+  assert.match(workspace, /const aiChipLabel =/);
+  assert.match(workspace, /title=\{aiChipLabel\} aria-label=\{aiChipLabel\}/);
+});
+
 test("automatically creates secure isolated anonymous browser accounts", async () => {
   const authShell = await readFile(new URL("../app/auth-shell.tsx", import.meta.url), "utf8");
   const route = await readFile(new URL("../app/api/auth/anonymous/route.ts", import.meta.url), "utf8");

@@ -136,10 +136,13 @@ export default function Workspace({
 
   const applyAiSettings = useCallback((status: AiSettingsStatus) => {
     setAiSettings(status);
-    setCustomBaseUrl(status.providers.custom.baseUrl ?? "");
-    setCustomModel(status.providers.custom.model ?? "");
-    setCustomApiFormat(status.providers.custom.apiFormat ?? "responses");
-    setCustomReasoningEffort(status.providers.custom.reasoningEffort ?? "medium");
+  }, []);
+
+  const syncCustomDraft = useCallback((custom: AiSettingsStatus["providers"]["custom"]) => {
+    setCustomBaseUrl(custom.baseUrl ?? "");
+    setCustomModel(custom.model ?? "");
+    setCustomApiFormat(custom.apiFormat ?? "responses");
+    setCustomReasoningEffort(custom.reasoningEffort ?? "medium");
   }, []);
 
   const loadEpisodes = useCallback(async () => {
@@ -158,8 +161,9 @@ export default function Workspace({
   const loadAiSettings = useCallback(async () => {
     const data = await responseJson<AiSettingsStatus>(await apiFetch("/api/ai-settings", { cache: "no-store" }));
     applyAiSettings(data);
+    syncCustomDraft(data.providers.custom);
     return data;
-  }, [applyAiSettings]);
+  }, [applyAiSettings, syncCustomDraft]);
 
   const loadInitial = useCallback(async () => {
     setLoading(true);
@@ -503,7 +507,7 @@ export default function Workspace({
         body: JSON.stringify({ provider: "deepseek", apiKey: deepseekApiKey }),
       }));
       applyAiSettings(status);
-      setDeepseekApiKey("");
+      closeAiModal();
       if (!account?.connected) setSetupGuideOpen(true);
       setNotice({ kind: "success", text: "DeepSeek 已连接，可以开始生成内容梳理和学习 Prompt" });
     } catch (error) {
@@ -526,7 +530,8 @@ export default function Workspace({
         }),
       }));
       applyAiSettings(status);
-      setCustomApiKey("");
+      syncCustomDraft(status.providers.custom);
+      closeAiModal();
       if (!account?.connected) setSetupGuideOpen(true);
       setNotice({ kind: "success", text: "自定义 API 已连接，可以开始生成内容梳理和学习 Prompt" });
     } catch (error) {
@@ -558,8 +563,6 @@ export default function Workspace({
     try {
       const status = await responseJson<AiSettingsStatus>(await apiFetch(`/api/ai-settings?provider=${provider}`, { method: "DELETE" }));
       applyAiSettings(status);
-      if (provider === "deepseek") setDeepseekApiKey("");
-      else setCustomApiKey("");
       setNotice({ kind: "success", text: `已删除 ${providerName} 配置` });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : `删除 ${providerName} 设置失败` });
@@ -574,8 +577,17 @@ export default function Workspace({
     setCustomReasoningEffort("medium");
   }
 
+  function closeAiModal() {
+    setDeepseekApiKey("");
+    setCustomApiKey("");
+    setAiModalOpen(false);
+  }
+
   const defaultProviderStatus = aiSettings.defaultProvider ? aiSettings.providers[aiSettings.defaultProvider] : null;
   const defaultProviderName = aiSettings.defaultProvider === "deepseek" ? "DeepSeek" : "自定义 API";
+  const aiChipLabel = defaultProviderStatus
+    ? `${defaultProviderName} · ${defaultProviderStatus.model} · ${defaultProviderStatus.keyHint ?? "已连接"}`
+    : "设置 AI 提供商";
 
   return (
     <main className="site-shell">
@@ -584,11 +596,9 @@ export default function Workspace({
           <span className="brand-mark">声</span><span>声笺</span><span className="brand-en">SONIC NOTES</span>
         </a>
         <div className="header-actions">
-          <button className="account-chip ai-chip" type="button" onClick={() => setAiModalOpen(true)}>
+          <button className="account-chip ai-chip" type="button" onClick={() => setAiModalOpen(true)} title={aiChipLabel} aria-label={aiChipLabel}>
             <span className={defaultProviderStatus ? "online-dot" : "offline-dot"} />
-            {defaultProviderStatus
-              ? `${defaultProviderName} · ${defaultProviderStatus.model} · ${defaultProviderStatus.keyHint ?? "已连接"}`
-              : "设置 AI 提供商"}
+            <span className="ai-chip-label">{aiChipLabel}</span>
           </button>
           {account?.connected ? (
             <button className="account-chip" type="button" onClick={() => void disconnectAccount()} title="点击断开账号">
@@ -772,9 +782,9 @@ export default function Workspace({
       )}
 
       {aiModalOpen && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setAiModalOpen(false)}>
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && closeAiModal()}>
           <section className="connect-modal ai-modal" role="dialog" aria-modal="true" aria-labelledby="ai-settings-title">
-            <button className="modal-close" type="button" onClick={() => setAiModalOpen(false)} aria-label="关闭">×</button>
+            <button className="modal-close" type="button" onClick={closeAiModal} aria-label="关闭">×</button>
             <span className="modal-kicker">AI PROVIDER</span>
             <h2 id="ai-settings-title">AI 提供商设置</h2>
             <p>生成时，所选文稿和梳理框架会发送给默认提供商。Key 仅提交一次，并在服务端使用 AES-GCM 加密保存。</p>
