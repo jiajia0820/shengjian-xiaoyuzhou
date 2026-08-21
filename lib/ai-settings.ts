@@ -144,15 +144,27 @@ function validateDeepseekInput(body: Record<string, unknown>): string {
 }
 
 function keyHint(value: string): string {
-  return value.length >= 5 ? `•••• ${value.slice(-4)}` : "••••";
+  const hint: { version: 1; length: number; suffix?: string } = {
+    version: 1,
+    length: value.length,
+  };
+  if (value.length >= 5) hint.suffix = value.slice(-4);
+  return JSON.stringify(hint);
 }
 
-function safeKeyHint(value: string): string | null {
-  const hint = value.trim();
-  if (!hint) return null;
-  if (hint === "••••") return hint;
-  const suffix = hint.slice(-4);
-  return suffix ? `•••• ${suffix}` : "••••";
+function safeKeyHint(value: string): string {
+  try {
+    const hint: unknown = JSON.parse(value);
+    if (typeof hint !== "object" || hint === null || !Object.prototype.hasOwnProperty.call(hint, "version")
+      || !Object.prototype.hasOwnProperty.call(hint, "length")) return "••••";
+    const { version, length, suffix } = hint as { version?: unknown; length?: unknown; suffix?: unknown };
+    if (version !== 1 || !Number.isSafeInteger(length) || length < 1 || length > MAX_API_KEY_LENGTH) return "••••";
+    if (length <= 4) return "••••";
+    if (typeof suffix !== "string" || suffix.length !== 4 || /[\s\p{Cc}]/u.test(suffix)) return "••••";
+    return `•••• ${suffix}`;
+  } catch {
+    return "••••";
+  }
 }
 
 function toDeepseekStatus(setting: AiSettingRecord | undefined): DeepseekProviderStatus {

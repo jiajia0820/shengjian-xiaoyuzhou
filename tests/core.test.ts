@@ -371,6 +371,7 @@ test("stores provider configurations without exposing credentials and preserves 
     };
   }
   const settings = await import("../lib/ai-settings.ts");
+  const db = await import("../lib/db.ts");
   const runtime = await import("../lib/runtime.ts");
   assert.equal(typeof runtime.getRuntimeEnv().TOKEN_ENCRYPTION_KEY, "string");
 
@@ -424,6 +425,11 @@ test("stores provider configurations without exposing credentials and preserves 
     keyHint: "•••• 6789",
     connectedAt: deepseekStatus.providers.deepseek.connectedAt,
   });
+  assert.deepEqual(JSON.parse((await db.getAiSetting("settings-owner", "deepseek"))?.key_hint ?? ""), {
+    version: 1,
+    length: "sk-0123456789".length,
+    suffix: "6789",
+  });
   await assert.rejects(
     () => settings.saveAiProvider("settings-owner", { provider: "deepseek", apiKey: "sk-0123456789", model: "ignored" }),
     (error: unknown) => error instanceof HttpError && error.code === "INVALID_AI_PROVIDER_INPUT",
@@ -459,6 +465,35 @@ test("stores provider configurations without exposing credentials and preserves 
   });
   assert.doesNotMatch(JSON.stringify(shortKeyStatus), /abcd/);
   assert.equal(shortKeyStatus.providers.custom.keyHint, "••••");
+
+  await db.saveAiSetting({
+    user_id: "legacy-key-owner",
+    provider: "custom",
+    api_format: "responses",
+    base_url: "https://relay.example/v1",
+    model: "gpt-5.6-luna",
+    reasoning_effort: null,
+    api_key_cipher: "legacy-cipher",
+    key_hint: "•••• abcd",
+    connected_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+  });
+  await db.setAiPreference("legacy-key-owner", "custom");
+  const legacyStatus = await settings.getAiSettingsStatus("legacy-key-owner");
+  assert.equal(legacyStatus.providers.custom.keyHint, "••••");
+  assert.doesNotMatch(JSON.stringify(legacyStatus), /abcd/);
+
+  const storedCustom = await db.getAiSetting("settings-owner", "custom");
+  assert.ok(storedCustom);
+  assert.deepEqual(JSON.parse(storedCustom.key_hint), {
+    version: 1,
+    length: "relay-token-1234".length,
+    suffix: "1234",
+  });
+  assert.deepEqual(JSON.parse((await db.getAiSetting("short-key-owner", "custom"))?.key_hint ?? ""), {
+    version: 1,
+    length: 4,
+  });
 });
 
 test("keeps AI provider settings routes safe and provider-aware", async () => {
