@@ -40,3 +40,6 @@ yarn-error.log*
 /outputs/
 /work/
 *.tsbuildinfo
+
+# local design companion
+/.superpowers/
