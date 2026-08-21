@@ -7,6 +7,258 @@ import { decryptSecret, encryptSecret, phoneHint, sha256Hex } from "../lib/secur
 import { parseEpisodeUrl, XiaoyuzhouError } from "../lib/xiaoyuzhou.ts";
 import { isAllowedOrigin, parseCookieHeader, serializeCookie } from "../lib/request-security-core.ts";
 import { anonymousTokenHash, createAnonymousToken } from "../lib/anonymous-auth-core.ts";
+import { buildCustomModelRequest, normalizeCustomBaseUrl, requestCustomModel } from "../lib/ai-provider.ts";
+import { HttpError } from "../lib/http-error.ts";
+
+test("normalizes a safe custom API root", () => {
+  assert.equal(normalizeCustomBaseUrl(" https://relay.example/v1/ "), "https://relay.example/v1");
+});
+
+test("rejects unsafe custom API roots", () => {
+  for (const value of [
+    "http://relay.example/v1",
+    "https://name:pass@relay.example/v1",
+    "https://relay.example/v1?token=secret",
+    "https://relay.example/v1#fragment",
+    "https://127.0.0.1/v1",
+    "https://[::1]/v1",
+    "https://localhost/v1",
+    "https://localhost./v1",
+    "https://api.internal/v1",
+  ]) assert.throws(() => normalizeCustomBaseUrl(value));
+});
+
+test("maps a custom Responses request with selected reasoning effort", () => {
+  assert.deepEqual(buildCustomModelRequest({
+    provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: "medium",
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }), {
+    url: "https://relay.example/v1/responses",
+    body: {
+      model: "gpt-5.6-luna", instructions: "system rules", input: "document",
+      max_output_tokens: 1600, reasoning: { effort: "medium" },
+    },
+  });
+});
+
+test("maps a custom Chat Completions request without DeepSeek thinking", () => {
+  assert.deepEqual(buildCustomModelRequest({
+    provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna", apiFormat: "chat_completions", reasoningEffort: null,
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }), {
+    url: "https://relay.example/v1/chat/completions",
+    body: {
+      model: "gpt-5.6-luna",
+      messages: [
+        { role: "system", content: "system rules" },
+        { role: "user", content: "document" },
+      ],
+      stream: false,
+      max_tokens: 1600,
+    },
+  });
+});
+
+test("sends a custom Responses request without following redirects", async () => {
+  const response = await requestCustomModel({
+    provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: "medium",
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }, async (url, init) => {
+    assert.equal(String(url), "https://relay.example/v1/responses");
+    assert.equal(init?.method, "POST");
+    assert.equal(init?.redirect, "manual");
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer relay-key");
+    return Response.json({
+      output: [{ type: "message", content: [{ type: "output_text", text: "## Result" }] }],
+    });
+  });
+  assert.equal(response.text, "## Result");
+  assert.equal(response.provider, "custom");
+  assert.equal(response.apiFormat, "responses");
+  assert.equal(response.model, "gpt-5.6-luna");
+});
+
+test("reads a custom Chat Completions response without a DeepSeek thinking field", async () => {
+  const response = await requestCustomModel({
+    provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna", apiFormat: "chat_completions", reasoningEffort: null,
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }, async (url, init) => {
+    assert.equal(String(url), "https://relay.example/v1/chat/completions");
+    assert.equal(init?.redirect, "manual");
+    assert.equal(JSON.stringify(init?.body).includes("thinking"), false);
+    return Response.json({ choices: [{ message: { content: "## Result" } }] });
+  });
+  assert.equal(response.text, "## Result");
+  assert.equal(response.apiFormat, "chat_completions");
+});
+
+test("maps a custom API credential rejection without leaking its key", async () => {
+  await assert.rejects(requestCustomModel({
+    provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }, async () => new Response("unauthorized", { status: 401 })), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.status, 400);
+    assert.equal(error.code, "AI_CREDENTIAL_ERROR");
+    assert.doesNotMatch(error.message, /relay-key/);
+    return true;
+  });
+});
+
+test("maps a custom API forbidden response to a credential error", async () => {
+  await assert.rejects(requestCustomModel({
+    provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }, async () => new Response("forbidden", { status: 403 })), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.status, 400);
+    assert.equal(error.code, "AI_CREDENTIAL_ERROR");
+    assert.doesNotMatch(error.message, /relay-key/);
+    return true;
+  });
+});
+
+test("preserves a custom API rate-limit status", async () => {
+  await assert.rejects(requestCustomModel({
+    provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }, async () => new Response("limited", { status: 429 })), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.status, 429);
+    assert.equal(error.code, "AI_RATE_LIMITED");
+    return true;
+  });
+});
+
+test("maps custom API redirects and upstream failures to a safe gateway error", async () => {
+  for (const status of [302, 500]) {
+    await assert.rejects(requestCustomModel({
+      provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+      model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
+    }, {
+      instructions: "system rules", input: "document", maxOutputTokens: 1600,
+    }, async () => new Response(null, { status })), (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.status, 502);
+      assert.equal(error.code, "AI_UPSTREAM_ERROR");
+      return true;
+    });
+  }
+});
+
+test("rejects an empty custom API response", async () => {
+  await assert.rejects(requestCustomModel({
+    provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }, async () => Response.json({ output: [] })), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.status, 502);
+    assert.equal(error.code, "AI_EMPTY_OUTPUT");
+    return true;
+  });
+});
+
+test("maps a custom API timeout to a gateway timeout", async () => {
+  await assert.rejects(requestCustomModel({
+    provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }, async () => {
+    throw new DOMException("timed out", "AbortError");
+  }), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.status, 504);
+    assert.equal(error.code, "AI_TIMEOUT");
+    return true;
+  });
+});
+
+test("maps a custom API network failure to a safe gateway error", async () => {
+  await assert.rejects(requestCustomModel({
+    provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }, async () => {
+    throw new Error("connection refused");
+  }), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.status, 502);
+    assert.equal(error.code, "AI_UPSTREAM_ERROR");
+    assert.doesNotMatch(error.message, /relay-key|connection refused/);
+    return true;
+  });
+});
+
+test("dispatches DeepSeek through its SDK configuration with thinking disabled", async () => {
+  const aiProvider = await import("../lib/ai-provider.ts");
+  assert.equal(typeof aiProvider.executeModelRequest, "function");
+
+  let clientOptions: unknown;
+  let modelRequest: unknown;
+  const response = await aiProvider.executeModelRequest({
+    provider: "deepseek",
+    apiKey: "deepseek-key",
+  }, {
+    instructions: "system rules",
+    input: "document",
+    maxOutputTokens: 1600,
+  }, {
+    createDeepseekClient: async (options) => {
+      clientOptions = options;
+      return {
+        chat: {
+          completions: {
+            create: async (request) => {
+              modelRequest = request;
+              return { choices: [{ message: { content: "```markdown\n## Result\n```" } }] };
+            },
+          },
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(clientOptions, {
+    apiKey: "deepseek-key",
+    baseURL: "https://api.deepseek.com",
+    timeout: 120_000,
+    maxRetries: 1,
+  });
+  assert.deepEqual(modelRequest, {
+    model: "deepseek-v4-flash",
+    messages: [
+      { role: "system", content: "system rules" },
+      { role: "user", content: "document" },
+    ],
+    stream: false,
+    max_tokens: 1600,
+    thinking: { type: "disabled" },
+  });
+  assert.deepEqual(response, {
+    text: "## Result",
+    provider: "deepseek",
+    apiFormat: "chat_completions",
+    model: "deepseek-v4-flash",
+  });
+});
 
 test("accepts only canonical Xiaoyuzhou episode links", () => {
   assert.deepEqual(
