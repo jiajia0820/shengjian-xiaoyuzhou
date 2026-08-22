@@ -1067,6 +1067,137 @@ test("rejects custom Base URL echoes hidden by special URL spellings", async () 
   }
 });
 
+test("rejects adjacent custom Base URL echoes in either URL order", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrl = "https://api.public-provider.com/v1";
+  const adjacentOutputs = [
+    `https://evil.example/x,${baseUrl}`,
+    `${baseUrl},https://evil.example/x`,
+    `https://evil.example/x，${baseUrl}`,
+    `${baseUrl}，https://evil.example/x`,
+    `https://evil.example/x${baseUrl}`,
+    `${baseUrl}https://evil.example/x`,
+  ];
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    for (const leakedUrl of adjacentOutputs) {
+      await assert.rejects(requestCustomModel({
+        provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+        reasoningEffort: null,
+      }, {
+        instructions: "system rules", input: "document", maxOutputTokens: 1600,
+      }, async () => Response.json(apiFormat === "responses" ? {
+        output: [{ type: "message", content: [{ type: "output_text", text: leakedUrl }] }],
+      } : {
+        choices: [{ message: { content: leakedUrl } }],
+      }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
+        assert.ok(error instanceof HttpError);
+        assert.equal(error.status, 502);
+        assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
+        return true;
+      });
+    }
+  }
+});
+
+test("rejects custom Base URL echoes before comma-separated prose", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrl = "https://api.public-provider.com/v1";
+  const leakedUrls = [
+    `${baseUrl},continued prose`,
+    `${baseUrl}，后续文字`,
+  ];
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    for (const leakedUrl of leakedUrls) {
+      await assert.rejects(requestCustomModel({
+        provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+        reasoningEffort: null,
+      }, {
+        instructions: "system rules", input: "document", maxOutputTokens: 1600,
+      }, async () => Response.json(apiFormat === "responses" ? {
+        output: [{ type: "message", content: [{ type: "output_text", text: leakedUrl }] }],
+      } : {
+        choices: [{ message: { content: leakedUrl } }],
+      }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
+        assert.ok(error instanceof HttpError);
+        assert.equal(error.status, 502);
+        assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
+        return true;
+      });
+    }
+  }
+});
+
+test("rejects custom Base URL echoes when its path contains another URL scheme", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrls = [
+    "https://api.public-provider.com/v1https:foo",
+    "https://api.public-provider.com/https://foo",
+  ];
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    for (const baseUrl of baseUrls) {
+      for (const leakedUrl of [baseUrl, `${baseUrl}/child`]) {
+        await assert.rejects(requestCustomModel({
+          provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+          reasoningEffort: null,
+        }, {
+          instructions: "system rules", input: "document", maxOutputTokens: 1600,
+        }, async () => Response.json(apiFormat === "responses" ? {
+          output: [{ type: "message", content: [{ type: "output_text", text: leakedUrl }] }],
+        } : {
+          choices: [{ message: { content: leakedUrl } }],
+        }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
+          assert.ok(error instanceof HttpError);
+          assert.equal(error.status, 502);
+          assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
+          return true;
+        });
+      }
+    }
+  }
+});
+
+test("allows a different internal-scheme custom Base URL path", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrl = "https://api.public-provider.com/v1https:foo";
+  const unrelatedUrl = "https://api.public-provider.com/v1https:bar";
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    const response = await requestCustomModel({
+      provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+      reasoningEffort: null,
+    }, {
+      instructions: "system rules", input: "document", maxOutputTokens: 1600,
+    }, async () => Response.json(apiFormat === "responses" ? {
+      output: [{ type: "message", content: [{ type: "output_text", text: unrelatedUrl }] }],
+    } : {
+      choices: [{ message: { content: unrelatedUrl } }],
+    }), PUBLIC_HOST_RESOLVER);
+    assert.equal(response.text, unrelatedUrl);
+  }
+});
+
+test("rejects a custom Base URL path ending in a scheme-looking word before prose", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrl = "https://api.public-provider.com/v1https";
+  const leakedUrl = `${baseUrl}:continued`;
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    await assert.rejects(requestCustomModel({
+      provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+      reasoningEffort: null,
+    }, {
+      instructions: "system rules", input: "document", maxOutputTokens: 1600,
+    }, async () => Response.json(apiFormat === "responses" ? {
+      output: [{ type: "message", content: [{ type: "output_text", text: leakedUrl }] }],
+    } : {
+      choices: [{ message: { content: leakedUrl } }],
+    }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.status, 502);
+      assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
+      return true;
+    });
+  }
+});
+
 test("rejects a DeepSeek output that echoes its own key", async () => {
   await assert.rejects(requestDeepseekModel({
     provider: "deepseek", apiKey: "secret-sentinel", baseUrl: null,

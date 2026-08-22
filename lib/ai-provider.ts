@@ -295,14 +295,53 @@ function comparableHttpUrl(value: string): ComparableHttpUrl | null {
   }
 }
 
+const URL_BOUNDARY_PUNCTUATION = /[.,!?;:，。！？；：、…．｡]|\p{Pe}|\p{Pf}/gu;
+const URL_TRAILING_PUNCTUATION = /(?:[.,!?;:，。！？；：、…．｡]|\p{Pe}|\p{Pf})$/u;
+
 function outputUrlCandidates(value: string): string[] {
-  const candidates = [value];
-  let candidate = value;
-  while (/(?:[.,!?;:，。！？；：、…．｡]|\p{Pe}|\p{Pf})$/u.test(candidate)) {
-    candidate = candidate.slice(0, -1);
-    candidates.push(candidate);
+  const candidates = new Set<string>([value]);
+  for (const scheme of value.matchAll(/https?:/gi)) {
+    const start = scheme.index ?? 0;
+    if (start > 0) candidates.add(value.slice(0, start));
   }
-  return candidates;
+  for (const punctuation of value.matchAll(URL_BOUNDARY_PUNCTUATION)) {
+    const start = punctuation.index ?? 0;
+    const end = start + punctuation[0].length;
+    if (end < value.length) candidates.add(value.slice(0, end));
+  }
+  for (const initialCandidate of [...candidates]) {
+    let candidate = initialCandidate;
+    while (URL_TRAILING_PUNCTUATION.test(candidate)) {
+      candidate = candidate.slice(0, -1);
+      candidates.add(candidate);
+    }
+  }
+  return [...candidates];
+}
+
+function outputUrlRuns(text: string): string[] {
+  const runs: string[] = [];
+  let schemeStarts: number[] = [];
+  const flush = (end: number) => {
+    if (schemeStarts.length === 0) return;
+    const firstStart = schemeStarts[0];
+    runs.push(text.slice(firstStart, end));
+    if (schemeStarts.length > 1) {
+      for (let index = 0; index < schemeStarts.length; index += 1) {
+        runs.push(text.slice(schemeStarts[index], schemeStarts[index + 1] ?? end));
+      }
+    }
+    schemeStarts = [];
+  };
+  for (const boundary of text.matchAll(/https?:|[\s<>"\x27\x60]/gi)) {
+    if (boundary[0].endsWith(":")) {
+      schemeStarts.push(boundary.index ?? 0);
+    } else {
+      flush(boundary.index ?? text.length);
+    }
+  }
+  flush(text.length);
+  return runs;
 }
 
 function isBasePathOrDescendant(pathname: string, basePathname: string): boolean {
@@ -314,8 +353,11 @@ function outputContainsBaseUrl(text: string, baseUrl: string): boolean {
   const base = comparableHttpUrl(baseUrl);
   if (!base) return false;
   const basePathnames = [base.pathname, base.rawPathname];
-  for (const match of text.matchAll(/https?:[^\s<>"\x27\x60]+/gi)) {
-    for (const candidate of outputUrlCandidates(match[0])) {
+  const seenCandidates = new Set<string>();
+  for (const value of outputUrlRuns(text)) {
+    for (const candidate of outputUrlCandidates(value)) {
+      if (seenCandidates.has(candidate)) continue;
+      seenCandidates.add(candidate);
       const outputUrl = comparableHttpUrl(candidate);
       if (!outputUrl || outputUrl.protocol !== base.protocol || outputUrl.hostname !== base.hostname
         || outputUrl.port !== base.port) continue;
