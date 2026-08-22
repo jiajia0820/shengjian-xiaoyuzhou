@@ -131,7 +131,7 @@ export default function Workspace({
   const [customApiKey, setCustomApiKey] = useState("");
   const [customModel, setCustomModel] = useState("");
   const [customApiFormat, setCustomApiFormat] = useState<"responses" | "chat_completions">("responses");
-  const [customReasoningEffort, setCustomReasoningEffort] = useState<ReasoningEffort>("medium");
+  const [customReasoningEffort, setCustomReasoningEffort] = useState<ReasoningEffort | null>(null);
   const [aiSaving, setAiSaving] = useState(false);
 
   const applyAiSettings = useCallback((status: AiSettingsStatus) => {
@@ -142,7 +142,7 @@ export default function Workspace({
     setCustomBaseUrl(custom.baseUrl ?? "");
     setCustomModel(custom.model ?? "");
     setCustomApiFormat(custom.apiFormat ?? "responses");
-    setCustomReasoningEffort(custom.reasoningEffort ?? "medium");
+    setCustomReasoningEffort(custom.reasoningEffort);
   }, []);
 
   const loadEpisodes = useCallback(async () => {
@@ -855,7 +855,8 @@ export default function Workspace({
                   {customApiFormat === "responses" && (
                     <label>
                       <span>推理强度</span>
-                      <select value={customReasoningEffort} onChange={(event) => setCustomReasoningEffort(event.target.value as ReasoningEffort)}>
+                      <select value={customReasoningEffort ?? ""} onChange={(event) => setCustomReasoningEffort(event.target.value ? event.target.value as ReasoningEffort : null)}>
+                        <option value="">不发送推理强度</option>
                         <option value="low">低</option><option value="medium">中</option><option value="high">高</option>
                       </select>
                     </label>

@@ -127,6 +127,25 @@ test("keeps server status refreshes from partially rolling back custom provider 
   }
 });
 
+test("keeps custom Responses reasoning optional while presets and Chat remain strict", async () => {
+  const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
+  assert.match(workspace, /const \[customReasoningEffort, setCustomReasoningEffort\] = useState<ReasoningEffort \| null>\(null\)/);
+
+  const sync = workspace.match(/const syncCustomDraft = useCallback\(\(custom: AiSettingsStatus\["providers"\]\["custom"\]\) => \{([\s\S]*?)\n {2}\}, \[\]\);/)?.[1];
+  assert.ok(sync, "custom draft sync must be explicit");
+  assert.match(sync, /setCustomReasoningEffort\(custom\.reasoningEffort\);/);
+  assert.doesNotMatch(sync, /reasoningEffort \?\? "medium"/);
+
+  assert.match(workspace, /\{customApiFormat === "responses" && \([\s\S]*?<select value=\{customReasoningEffort \?\? ""\}/);
+  assert.match(workspace, /<option value="">不发送推理强度<\/option>/);
+  assert.match(workspace, /setCustomReasoningEffort\(event\.target\.value \? event\.target\.value as ReasoningEffort : null\)/);
+
+  const save = functionBody(workspace, "saveCustomSettings");
+  assert.match(save, /reasoningEffort: customApiFormat === "responses" \? customReasoningEffort : null/);
+  const preset = functionBody(workspace, "applyCodexPreset");
+  assert.match(preset, /setCustomApiFormat\("responses"\);\s*setCustomReasoningEffort\("medium"\);/);
+});
+
 test("clears unsubmitted keys on every AI modal close path", async () => {
   const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
   const close = functionBody(workspace, "closeAiModal");

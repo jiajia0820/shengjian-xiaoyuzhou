@@ -10,7 +10,12 @@ import { decryptSecret, encryptSecret, phoneHint, sha256Hex } from "../lib/secur
 import { parseEpisodeUrl, XiaoyuzhouError } from "../lib/xiaoyuzhou.ts";
 import { isAllowedOrigin, parseCookieHeader, serializeCookie } from "../lib/request-security-core.ts";
 import { anonymousTokenHash, createAnonymousToken } from "../lib/anonymous-auth-core.ts";
-import { buildCustomModelRequest, normalizeCustomBaseUrl, requestCustomModel } from "../lib/ai-provider.ts";
+import {
+  buildCustomModelRequest,
+  normalizeCustomBaseUrl,
+  requestCustomModel,
+  requestDeepseekModel,
+} from "../lib/ai-provider.ts";
 import type { DeepseekAiRuntimeConfig } from "../lib/ai-provider.ts";
 import { HttpError } from "../lib/http-error.ts";
 
@@ -313,9 +318,19 @@ test("rejects unsafe custom API roots", () => {
     "https://[::1]/v1",
     "https://localhost/v1",
     "https://localhost./v1",
+    "https://intranet/v1",
+    "https://router/v1",
+    "https://api.lan/v1",
+    "https://service.home.arpa/v1",
+    "https://api.private/v1",
+    "https://api.intranet/v1",
+    "https://service.localdomain/v1",
+    "https://hidden-service.onion/v1",
     "https://api.internal/v1",
   ]) assert.throws(() => normalizeCustomBaseUrl(value));
 });
+
+const PUBLIC_HOST_RESOLVER = async () => ["93.184.216.34"];
 
 test("validates a clean custom AI configuration and rejects unsafe custom keys", async () => {
   const settings = await import("../lib/ai-settings.ts");
@@ -589,6 +604,7 @@ test("maps a custom Chat Completions request without DeepSeek thinking", () => {
 });
 
 test("sends a custom Responses request without following redirects", async () => {
+  let resolvedHostname = "";
   const response = await requestCustomModel({
     provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
     model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: "medium",
@@ -602,7 +618,11 @@ test("sends a custom Responses request without following redirects", async () =>
     return Response.json({
       output: [{ type: "message", content: [{ type: "output_text", text: "## Result" }] }],
     });
+  }, async (hostname) => {
+    resolvedHostname = hostname;
+    return ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"];
   });
+  assert.equal(resolvedHostname, "relay.example");
   assert.equal(response.text, "## Result");
   assert.equal(response.provider, "custom");
   assert.equal(response.apiFormat, "responses");
@@ -620,7 +640,7 @@ test("reads a custom Chat Completions response without a DeepSeek thinking field
     assert.equal(init?.redirect, "manual");
     assert.equal(JSON.stringify(init?.body).includes("thinking"), false);
     return Response.json({ choices: [{ message: { content: "## Result" } }] });
-  });
+  }, PUBLIC_HOST_RESOLVER);
   assert.equal(response.text, "## Result");
   assert.equal(response.apiFormat, "chat_completions");
 });
@@ -631,7 +651,7 @@ test("maps a custom API credential rejection without leaking its key", async () 
     model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
   }, {
     instructions: "system rules", input: "document", maxOutputTokens: 1600,
-  }, async () => new Response("unauthorized", { status: 401 })), (error: unknown) => {
+  }, async () => new Response("unauthorized", { status: 401 }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
     assert.ok(error instanceof HttpError);
     assert.equal(error.status, 400);
     assert.equal(error.code, "AI_CREDENTIAL_ERROR");
@@ -646,7 +666,7 @@ test("maps a custom API forbidden response to a credential error", async () => {
     model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
   }, {
     instructions: "system rules", input: "document", maxOutputTokens: 1600,
-  }, async () => new Response("forbidden", { status: 403 })), (error: unknown) => {
+  }, async () => new Response("forbidden", { status: 403 }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
     assert.ok(error instanceof HttpError);
     assert.equal(error.status, 400);
     assert.equal(error.code, "AI_CREDENTIAL_ERROR");
@@ -661,7 +681,7 @@ test("preserves a custom API rate-limit status", async () => {
     model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
   }, {
     instructions: "system rules", input: "document", maxOutputTokens: 1600,
-  }, async () => new Response("limited", { status: 429 })), (error: unknown) => {
+  }, async () => new Response("limited", { status: 429 }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
     assert.ok(error instanceof HttpError);
     assert.equal(error.status, 429);
     assert.equal(error.code, "AI_RATE_LIMITED");
@@ -676,7 +696,7 @@ test("maps custom API redirects and upstream failures to a safe gateway error", 
       model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
     }, {
       instructions: "system rules", input: "document", maxOutputTokens: 1600,
-    }, async () => new Response(null, { status })), (error: unknown) => {
+    }, async () => new Response(null, { status }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
       assert.ok(error instanceof HttpError);
       assert.equal(error.status, 502);
       assert.equal(error.code, "AI_UPSTREAM_ERROR");
@@ -691,7 +711,7 @@ test("rejects an empty custom API response", async () => {
     model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: null,
   }, {
     instructions: "system rules", input: "document", maxOutputTokens: 1600,
-  }, async () => Response.json({ output: [] })), (error: unknown) => {
+  }, async () => Response.json({ output: [] }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
     assert.ok(error instanceof HttpError);
     assert.equal(error.status, 502);
     assert.equal(error.code, "AI_EMPTY_OUTPUT");
@@ -707,7 +727,7 @@ test("maps a custom API timeout to a gateway timeout", async () => {
     instructions: "system rules", input: "document", maxOutputTokens: 1600,
   }, async () => {
     throw new DOMException("timed out", "AbortError");
-  }), (error: unknown) => {
+  }, PUBLIC_HOST_RESOLVER), (error: unknown) => {
     assert.ok(error instanceof HttpError);
     assert.equal(error.status, 504);
     assert.equal(error.code, "AI_TIMEOUT");
@@ -723,11 +743,156 @@ test("maps a custom API network failure to a safe gateway error", async () => {
     instructions: "system rules", input: "document", maxOutputTokens: 1600,
   }, async () => {
     throw new Error("connection refused");
-  }), (error: unknown) => {
+  }, PUBLIC_HOST_RESOLVER), (error: unknown) => {
     assert.ok(error instanceof HttpError);
     assert.equal(error.status, 502);
     assert.equal(error.code, "AI_UPSTREAM_ERROR");
     assert.doesNotMatch(error.message, /relay-key|connection refused/);
+    return true;
+  });
+});
+
+test("does not trust or expose an HttpError thrown by a custom API fetch", async () => {
+  await assert.rejects(requestCustomModel({
+    provider: "custom", apiKey: "secret-sentinel", baseUrl: "https://api.public-provider.com/v1",
+    model: "public-model", apiFormat: "responses", reasoningEffort: null,
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }, async () => {
+    throw new HttpError(418, "UPSTREAM_DETAILS", "secret-sentinel at https://api.public-provider.com/v1");
+  }, PUBLIC_HOST_RESOLVER), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.status, 502);
+    assert.equal(error.code, "AI_UPSTREAM_ERROR");
+    assert.doesNotMatch(error.message, /secret-sentinel|public-provider|UPSTREAM_DETAILS/);
+    return true;
+  });
+});
+
+test("rejects any non-public A or AAAA result before the custom API request", async () => {
+  const unsafeAddresses = [
+    "0.0.0.1", "10.0.0.1", "100.64.0.1", "127.0.0.1", "169.254.1.1", "172.16.0.1",
+    "192.0.2.1", "192.168.0.1", "198.18.0.1", "198.51.100.1", "203.0.113.1",
+    "224.0.0.1", "240.0.0.1", "::", "::1", "::ffff:10.0.0.1", "2001:db8::1",
+    "3fff::1", "fc00::1", "fd00::1", "fe80::1", "ff02::1",
+  ];
+  for (const address of unsafeAddresses) {
+    let providerRequested = false;
+    await assert.rejects(requestCustomModel({
+      provider: "custom", apiKey: "secret-sentinel", baseUrl: "https://api.public-provider.com/v1",
+      model: "public-model", apiFormat: "responses", reasoningEffort: null,
+    }, {
+      instructions: "system rules", input: "document", maxOutputTokens: 1600,
+    }, async () => {
+      providerRequested = true;
+      return Response.json({
+        output: [{ type: "message", content: [{ type: "output_text", text: "must not run" }] }],
+      });
+    }, async () => ["93.184.216.34", address]), (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.status, 400);
+      assert.equal(error.code, "AI_UNSAFE_ENDPOINT");
+      assert.doesNotMatch(error.message, /secret-sentinel|public-provider|93\.184|10\.0/);
+      return true;
+    });
+    assert.equal(providerRequested, false, `provider fetch must not run for ${address}`);
+  }
+});
+
+test("fails closed when public address resolution fails or returns no addresses", async () => {
+  for (const resolveHostname of [
+    async () => [] as string[],
+    async () => { throw new Error("resolver exposed details"); },
+  ]) {
+    let providerRequested = false;
+    await assert.rejects(requestCustomModel({
+      provider: "custom", apiKey: "secret-sentinel", baseUrl: "https://api.public-provider.com/v1",
+      model: "public-model", apiFormat: "chat_completions", reasoningEffort: null,
+    }, {
+      instructions: "system rules", input: "document", maxOutputTokens: 1600,
+    }, async () => {
+      providerRequested = true;
+      return Response.json({ choices: [{ message: { content: "must not run" } }] });
+    }, resolveHostname), (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.status, 400);
+      assert.equal(error.code, "AI_UNSAFE_ENDPOINT");
+      assert.doesNotMatch(error.message, /secret-sentinel|public-provider|resolver exposed/);
+      return true;
+    });
+    assert.equal(providerRequested, false);
+  }
+});
+
+test("resolves only a hostname through fixed short-lived DNS-over-HTTPS requests", async () => {
+  const aiProvider = await import("../lib/ai-provider.ts") as typeof import("../lib/ai-provider.ts") & {
+    resolveHostnameViaDoh?: (hostname: string, fetchImplementation: typeof fetch) => Promise<string[]>;
+  };
+  assert.equal(typeof aiProvider.resolveHostnameViaDoh, "function");
+  const requestedTypes: string[] = [];
+  const addresses = await aiProvider.resolveHostnameViaDoh!("api.public-provider.com", async (input, init) => {
+    const resolverUrl = new URL(String(input));
+    assert.notEqual(resolverUrl.hostname, "api.public-provider.com");
+    assert.equal(resolverUrl.searchParams.get("name"), "api.public-provider.com");
+    const type = resolverUrl.searchParams.get("type") ?? "";
+    requestedTypes.push(type);
+    assert.equal(init?.redirect, "manual");
+    assert.ok(init?.signal instanceof AbortSignal);
+    assert.equal(new Headers(init?.headers).get("accept"), "application/dns-json");
+    return Response.json(type === "A"
+      ? { Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] }
+      : { Status: 0, Answer: [{ type: 28, data: "2606:2800:220:1:248:1893:25c8:1946" }] });
+  });
+  assert.deepEqual(requestedTypes.sort(), ["A", "AAAA"]);
+  assert.deepEqual(addresses.sort(), ["2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34"]);
+});
+
+test("rejects custom Responses and Chat outputs that echo this request's key or base URL", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrl = "https://api.public-provider.com/v1/";
+  const leakedValues = [
+    apiKey,
+    `Bearer ${apiKey}`,
+    "https://api.public-provider.com/v1",
+    "https://api.public-provider.com/v1/",
+  ];
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    for (const leakedValue of leakedValues) {
+      await assert.rejects(requestCustomModel({
+        provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+        reasoningEffort: null,
+      }, {
+        instructions: "system rules", input: "document", maxOutputTokens: 1600,
+      }, async () => Response.json(apiFormat === "responses" ? {
+        output: [{ type: "message", content: [{ type: "output_text", text: `## Result\n\n${leakedValue}` }] }],
+      } : {
+        choices: [{ message: { content: `## Result\n\n${leakedValue}` } }],
+      }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
+        assert.ok(error instanceof HttpError);
+        assert.equal(error.status, 502);
+        assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
+        assert.doesNotMatch(error.message, /secret-sentinel|public-provider|Bearer/);
+        return true;
+      });
+    }
+  }
+});
+
+test("rejects a DeepSeek output that echoes its own key", async () => {
+  await assert.rejects(requestDeepseekModel({
+    provider: "deepseek", apiKey: "secret-sentinel", baseUrl: null,
+    model: "deepseek-v4-flash", apiFormat: "chat_completions", reasoningEffort: null,
+  }, {
+    instructions: "system rules", input: "document", maxOutputTokens: 1600,
+  }, async () => ({
+    chat: { completions: { create: async () => ({
+      choices: [{ message: { content: "## Result\n\nBearer secret-sentinel" } }],
+    }) } },
+  })), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.status, 502);
+    assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
+    assert.doesNotMatch(error.message, /secret-sentinel|Bearer/);
     return true;
   });
 });
@@ -958,6 +1123,86 @@ test("keeps custom provider credentials out of generated analysis artifacts", as
     for (const artifact of [storedMarkdown, JSON.stringify(storedRecord), JSON.stringify(payload)]) {
       assert.doesNotMatch(artifact, /relay\.example|relay-secret/);
     }
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+  }
+});
+
+test("refunds and writes no analysis artifacts when a custom API echoes credentials", async () => {
+  const config = {
+    provider: "custom" as const,
+    apiKey: "secret-sentinel",
+    baseUrl: "https://api.public-provider.com/v1",
+    model: "public-model",
+    apiFormat: "responses" as const,
+    reasoningEffort: null,
+  };
+  const episode = {
+    id: 1, user_id: "owner", eid: "episode-id", source_url: "https://www.xiaoyuzhoufm.com/episode/episode-id",
+    title: "安全边界测试", podcast_title: "样本播客", published_at: null, duration_seconds: 1800,
+    segment_count: 10, original_key: "original.md", current_key: "current.md", original_hash: "original",
+    content_hash: "current", created_at: "2026-08-15T00:00:00.000Z", updated_at: "2026-08-15T00:00:00.000Z",
+  };
+  let refunds = 0;
+  let releases = 0;
+  let documentWrites = 0;
+  let recordWrites = 0;
+  globalThis.__analysisGenerateRouteTestDeps = {
+    "@/lib/analysis": {
+      buildAnalysisMarkdown,
+      generateAnalysisBody: async ({ config: receivedConfig }: { config: typeof config }) => (
+        await requestCustomModel(receivedConfig, {
+          instructions: "system rules", input: "document", maxOutputTokens: 1600,
+        }, async () => Response.json({
+          output: [{ type: "message", content: [{ type: "output_text", text: "Bearer secret-sentinel" }] }],
+        }), PUBLIC_HOST_RESOLVER)
+      ).text,
+    },
+    "@/lib/ai-settings": { readActiveAiConfiguration: async () => config },
+    "@/lib/db": {
+      acquireAnalysisLease: async () => "lease-id",
+      consumeUsage: async () => true,
+      getEpisodeRecord: async () => episode,
+      getFramework: async () => null,
+      publicAnalysis: (record: Record<string, unknown>) => record,
+      refundUsage: async () => { refunds += 1; },
+      releaseAnalysisLease: async () => { releases += 1; },
+      setOriginalHash: async () => undefined,
+      upsertAnalysisResult: async () => { recordWrites += 1; },
+    },
+    "@/lib/documents": {
+      analysisDocumentKey: async () => "analysis.md",
+      putMarkdown: async () => { documentWrites += 1; },
+      readMarkdown: async () => "播客文稿正文",
+    },
+    "@/lib/frameworks": {
+      frameworkForAnalysis: () => SYSTEM_FRAMEWORK,
+      SYSTEM_FRAMEWORK_ID: SYSTEM_FRAMEWORK.id,
+    },
+    "@/lib/security": { sha256Hex: async () => "source-hash" },
+    "@/lib/user": {
+      apiError: (error: unknown) => error instanceof HttpError
+        ? Response.json({ error: error.code, message: error.message }, { status: error.status })
+        : Response.json({ error: "INTERNAL_ERROR" }, { status: 500 }),
+      HttpError,
+      requireApiUser: async () => ({ userId: "owner" }),
+    },
+  };
+  try {
+    const route = await import(`${new URL("../app/api/episodes/[eid]/analyses/generate/route.ts", import.meta.url).href}?echo-boundary=${crypto.randomUUID()}`);
+    const response = await route.POST(new Request("https://app.example/api/episodes/episode-id/analyses/generate", {
+      method: "POST",
+      body: JSON.stringify({ kind: "summary", source: "current" }),
+    }), { params: Promise.resolve({ eid: "episode-id" }) });
+    const payloadText = await response.text();
+
+    assert.equal(response.status, 502);
+    assert.match(payloadText, /AI_SENSITIVE_OUTPUT/);
+    assert.doesNotMatch(payloadText, /secret-sentinel|public-provider/);
+    assert.equal(refunds, 1);
+    assert.equal(releases, 1);
+    assert.equal(documentWrites, 0);
+    assert.equal(recordWrites, 0);
   } finally {
     globalThis.__analysisGenerateRouteTestDeps = undefined;
   }
