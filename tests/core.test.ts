@@ -907,6 +907,7 @@ test("rejects canonical-equivalent custom Base URLs before returning Responses o
   const leakedUrls = [
     "HTTPS://API.PUBLIC-PROVIDER.COM:443/%76%31",
     "https://api.public-provider.com/v1/diagnostics",
+    "https://api.public-provider.com/v1/diagnostics%",
   ];
   for (const apiFormat of ["responses", "chat_completions"] as const) {
     for (const leakedUrl of leakedUrls) {
@@ -924,6 +925,103 @@ test("rejects canonical-equivalent custom Base URLs before returning Responses o
         assert.equal(error.status, 502);
         assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
         assert.doesNotMatch(error.message, /secret-sentinel|public-provider|Bearer/);
+        return true;
+      });
+    }
+  }
+});
+
+test("rejects custom Base URL echoes with sentence punctuation after a dotted path", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrl = "https://api.public-provider.com/v1.";
+  const leakedUrl = "https://api.public-provider.com/v1..";
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    await assert.rejects(requestCustomModel({
+      provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+      reasoningEffort: null,
+    }, {
+      instructions: "system rules", input: "document", maxOutputTokens: 1600,
+    }, async () => Response.json(apiFormat === "responses" ? {
+      output: [{ type: "message", content: [{ type: "output_text", text: ["## Result", leakedUrl].join("\n\n") }] }],
+    } : {
+      choices: [{ message: { content: ["## Result", leakedUrl].join("\n\n") } }],
+    }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.status, 502);
+      assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
+      return true;
+    });
+  }
+});
+
+test("rejects custom Base URL echoes followed by common Chinese punctuation", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrl = "https://api.public-provider.com/v1";
+  const trailingPunctuation = ["）", "】", "”", "！", "，", "；", "：", "？", "》", "」", "…"];
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    for (const punctuation of trailingPunctuation) {
+      await assert.rejects(requestCustomModel({
+        provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+        reasoningEffort: null,
+      }, {
+        instructions: "system rules", input: "document", maxOutputTokens: 1600,
+      }, async () => Response.json(apiFormat === "responses" ? {
+        output: [{ type: "message", content: [{
+          type: "output_text", text: ["## Result", `${baseUrl}${punctuation}`].join("\n\n"),
+        }] }],
+      } : {
+        choices: [{ message: { content: ["## Result", `${baseUrl}${punctuation}`].join("\n\n") } }],
+      }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
+        assert.ok(error instanceof HttpError);
+        assert.equal(error.status, 502);
+        assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
+        return true;
+      });
+    }
+  }
+});
+
+test("does not conflate encoded path separators with literal separators in custom output URLs", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrl = "https://api.public-provider.com/api%2Fv1";
+  const unrelatedUrl = "https://api.public-provider.com/api/v1";
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    const response = await requestCustomModel({
+      provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+      reasoningEffort: null,
+    }, {
+      instructions: "system rules", input: "document", maxOutputTokens: 1600,
+    }, async () => Response.json(apiFormat === "responses" ? {
+      output: [{ type: "message", content: [{ type: "output_text", text: ["## Result", unrelatedUrl].join("\n\n") }] }],
+    } : {
+      choices: [{ message: { content: ["## Result", unrelatedUrl].join("\n\n") } }],
+    }), PUBLIC_HOST_RESOLVER);
+    assert.equal(response.text, ["## Result", unrelatedUrl].join("\n\n"));
+  }
+});
+
+test("rejects custom Base URL echoes hidden by dot-segment normalization", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrl = "https://api.public-provider.com/v1";
+  const leakedUrls = [
+    "https://api.public-provider.com/v1/../diagnostics",
+    "HTTPS://API.PUBLIC-PROVIDER.COM:443/%76%31/%2e%2e/diagnostics",
+  ];
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    for (const leakedUrl of leakedUrls) {
+      await assert.rejects(requestCustomModel({
+        provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+        reasoningEffort: null,
+      }, {
+        instructions: "system rules", input: "document", maxOutputTokens: 1600,
+      }, async () => Response.json(apiFormat === "responses" ? {
+        output: [{ type: "message", content: [{ type: "output_text", text: leakedUrl }] }],
+      } : {
+        choices: [{ message: { content: leakedUrl } }],
+      }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
+        assert.ok(error instanceof HttpError);
+        assert.equal(error.status, 502);
+        assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
         return true;
       });
     }

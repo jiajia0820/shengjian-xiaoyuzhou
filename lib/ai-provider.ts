@@ -254,36 +254,72 @@ type ComparableHttpUrl = {
   hostname: string;
   port: string;
   pathname: string;
+  rawPathname: string;
 };
+
+function normalizeComparablePath(value: string): string {
+  return value.replace(/%([0-9a-f]{2})/gi, (_match, hex: string) => {
+    const character = String.fromCharCode(Number.parseInt(hex, 16));
+    return /^[A-Za-z0-9\-._~]$/.test(character) ? character : `%${hex.toUpperCase()}`;
+  }).replace(/\/+$/, "") || "/";
+}
+
+function rawUrlPathname(value: string): string {
+  const authorityStart = value.indexOf("://");
+  if (authorityStart < 0) return "/";
+  const afterAuthority = authorityStart + 3;
+  const pathOffset = value.slice(afterAuthority).search(/[/?#]/);
+  if (pathOffset < 0 || value[afterAuthority + pathOffset] !== "/") return "/";
+  const pathStart = afterAuthority + pathOffset;
+  const pathEnd = value.slice(pathStart).search(/[?#]/);
+  return pathEnd < 0 ? value.slice(pathStart) : value.slice(pathStart, pathStart + pathEnd);
+}
 
 function comparableHttpUrl(value: string): ComparableHttpUrl | null {
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    const pathname = decodeURIComponent(url.pathname).replace(/\/+$/, "") || "/";
+    const pathname = normalizeComparablePath(url.pathname);
+    const rawPathname = normalizeComparablePath(rawUrlPathname(value));
     return {
       protocol: url.protocol,
       hostname: url.hostname.toLowerCase().replace(/\.+$/, ""),
       port: url.port || (url.protocol === "https:" ? "443" : "80"),
       pathname,
+      rawPathname,
     };
   } catch {
     return null;
   }
 }
 
+function outputUrlCandidates(value: string): string[] {
+  const candidates = [value];
+  let candidate = value;
+  while (/(?:[.,!?;:，。！？；：、…．｡]|\p{Pe}|\p{Pf})$/u.test(candidate)) {
+    candidate = candidate.slice(0, -1);
+    candidates.push(candidate);
+  }
+  return candidates;
+}
+
+function isBasePathOrDescendant(pathname: string, basePathname: string): boolean {
+  return pathname === basePathname
+    || pathname.startsWith(basePathname === "/" ? "/" : basePathname + "/");
+}
+
 function outputContainsBaseUrl(text: string, baseUrl: string): boolean {
   const base = comparableHttpUrl(baseUrl);
   if (!base) return false;
+  const basePathnames = [base.pathname, base.rawPathname];
   for (const match of text.matchAll(/https?:\/\/[^\s<>"\x27\x60]+/gi)) {
-    const rawCandidate = match[0];
-    const candidates = [rawCandidate, rawCandidate.replace(/[)\]},.!?;:。]+$/, "")];
-    for (const candidate of candidates) {
+    for (const candidate of outputUrlCandidates(match[0])) {
       const outputUrl = comparableHttpUrl(candidate);
       if (!outputUrl || outputUrl.protocol !== base.protocol || outputUrl.hostname !== base.hostname
         || outputUrl.port !== base.port) continue;
-      if (outputUrl.pathname === base.pathname
-        || outputUrl.pathname.startsWith(base.pathname === "/" ? "/" : base.pathname + "/")) return true;
+      for (const outputPathname of [outputUrl.pathname, outputUrl.rawPathname]) {
+        if (basePathnames.some((basePathname) => isBasePathOrDescendant(outputPathname, basePathname))) return true;
+      }
     }
   }
   return false;
