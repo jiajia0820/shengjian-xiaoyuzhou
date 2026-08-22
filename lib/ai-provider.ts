@@ -249,8 +249,53 @@ function cleanModelMarkdown(value: string): string {
   return (fenced?.[1] ?? trimmed).trim();
 }
 
-function assertSafeModelOutput(text: string, sensitiveValues: readonly string[]): void {
-  if (sensitiveValues.some((value) => value.length > 0 && text.includes(value))) {
+type ComparableHttpUrl = {
+  protocol: string;
+  hostname: string;
+  port: string;
+  pathname: string;
+};
+
+function comparableHttpUrl(value: string): ComparableHttpUrl | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const pathname = decodeURIComponent(url.pathname).replace(/\/+$/, "") || "/";
+    return {
+      protocol: url.protocol,
+      hostname: url.hostname.toLowerCase().replace(/\.+$/, ""),
+      port: url.port || (url.protocol === "https:" ? "443" : "80"),
+      pathname,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function outputContainsBaseUrl(text: string, baseUrl: string): boolean {
+  const base = comparableHttpUrl(baseUrl);
+  if (!base) return false;
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"\x27\x60]+/gi)) {
+    const rawCandidate = match[0];
+    const candidates = [rawCandidate, rawCandidate.replace(/[)\]},.!?;:。]+$/, "")];
+    for (const candidate of candidates) {
+      const outputUrl = comparableHttpUrl(candidate);
+      if (!outputUrl || outputUrl.protocol !== base.protocol || outputUrl.hostname !== base.hostname
+        || outputUrl.port !== base.port) continue;
+      if (outputUrl.pathname === base.pathname
+        || outputUrl.pathname.startsWith(base.pathname === "/" ? "/" : base.pathname + "/")) return true;
+    }
+  }
+  return false;
+}
+
+function assertSafeModelOutput(
+  text: string,
+  sensitiveValues: readonly string[],
+  baseUrl?: string,
+): void {
+  if (sensitiveValues.some((value) => value.length > 0 && text.includes(value))
+    || baseUrl && outputContainsBaseUrl(text, baseUrl)) {
     throw new HttpError(502, "AI_SENSITIVE_OUTPUT", "AI 返回内容未通过安全检查，请稍后重试");
   }
 }
@@ -391,9 +436,7 @@ export async function requestCustomModel(
   assertSafeModelOutput(text, [
     runtimeConfig.apiKey,
     `Bearer ${runtimeConfig.apiKey}`,
-    runtimeConfig.baseUrl,
-    `${runtimeConfig.baseUrl}/`,
-  ]);
+  ], runtimeConfig.baseUrl);
   return { text, provider: "custom", apiFormat: config.apiFormat, model: config.model };
 }
 

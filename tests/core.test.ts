@@ -306,6 +306,14 @@ test("normalizes a safe custom API root", () => {
   assert.equal(normalizeCustomBaseUrl(" https://relay.example/v1/ "), "https://relay.example/v1");
 });
 
+test("enables strict public routing for global Worker fetches", async () => {
+  const viteConfig = await readFile(new URL("../vite.config.ts", import.meta.url), "utf8");
+  assert.match(
+    viteConfig,
+    /compatibility_flags:\s*\[\s*"nodejs_compat",\s*"global_fetch_strictly_public"\s*\]/,
+  );
+});
+
 test("rejects unsafe custom API roots", () => {
   for (const value of [
     "http://relay.example/v1",
@@ -389,6 +397,23 @@ test("validates a clean custom AI configuration and rejects unsafe custom keys",
     assert.doesNotMatch(error.message, /has whitespace|relay-token-1234/);
     return true;
   });
+});
+
+test("keeps custom API key validation strict at its eight-character floor", async () => {
+  const settings = await import("../lib/ai-settings.ts");
+  const validCustomFields = {
+    baseUrl: "https://relay.example/v1",
+    model: "gpt-5.6-luna",
+    apiFormat: "responses",
+    reasoningEffort: null,
+  };
+  for (const apiKey of ["", "1234567", "has whitespace", "safe\u0000key", "x".repeat(501)]) {
+    assert.throws(() => settings.validateCustomAiInput({ apiKey, ...validCustomFields }), (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.code, "INVALID_CUSTOM_AI_KEY");
+      return true;
+    });
+  }
 });
 
 test("normalizes an omitted custom Responses reasoning effort to null", async () => {
@@ -504,16 +529,18 @@ test("stores provider configurations without exposing credentials and preserves 
   assert.equal(removedStatus.providers.deepseek.connected, false);
   assert.equal(removedStatus.providers.custom.connected, true);
 
-  const shortKeyStatus = await settings.saveAiProvider("short-key-owner", {
-    provider: "custom",
-    apiKey: "abcd",
-    baseUrl: "https://relay.example/v1",
-    model: "gpt-5.6-luna",
-    apiFormat: "responses",
-    reasoningEffort: null,
-  });
-  assert.doesNotMatch(JSON.stringify(shortKeyStatus), /abcd/);
-  assert.equal(shortKeyStatus.providers.custom.keyHint, "••••");
+  await assert.rejects(
+    () => settings.saveAiProvider("short-key-owner", {
+      provider: "custom",
+      apiKey: "abcd",
+      baseUrl: "https://relay.example/v1",
+      model: "gpt-5.6-luna",
+      apiFormat: "responses",
+      reasoningEffort: null,
+    }),
+    (error: unknown) => error instanceof HttpError && error.code === "INVALID_CUSTOM_AI_KEY",
+  );
+  assert.equal(await db.getAiSetting("short-key-owner", "custom"), null);
 
   await db.saveAiSetting({
     user_id: "legacy-key-owner",
@@ -538,10 +565,6 @@ test("stores provider configurations without exposing credentials and preserves 
     version: 1,
     length: "relay-token-1234".length,
     suffix: "1234",
-  });
-  assert.deepEqual(JSON.parse((await db.getAiSetting("short-key-owner", "custom"))?.key_hint ?? ""), {
-    version: 1,
-    length: 4,
   });
 });
 
@@ -867,6 +890,35 @@ test("rejects custom Responses and Chat outputs that echo this request's key or 
         output: [{ type: "message", content: [{ type: "output_text", text: `## Result\n\n${leakedValue}` }] }],
       } : {
         choices: [{ message: { content: `## Result\n\n${leakedValue}` } }],
+      }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
+        assert.ok(error instanceof HttpError);
+        assert.equal(error.status, 502);
+        assert.equal(error.code, "AI_SENSITIVE_OUTPUT");
+        assert.doesNotMatch(error.message, /secret-sentinel|public-provider|Bearer/);
+        return true;
+      });
+    }
+  }
+});
+
+test("rejects canonical-equivalent custom Base URLs before returning Responses or Chat text", async () => {
+  const apiKey = "secret-sentinel";
+  const baseUrl = "https://api.public-provider.com/v1";
+  const leakedUrls = [
+    "HTTPS://API.PUBLIC-PROVIDER.COM:443/%76%31",
+    "https://api.public-provider.com/v1/diagnostics",
+  ];
+  for (const apiFormat of ["responses", "chat_completions"] as const) {
+    for (const leakedUrl of leakedUrls) {
+      await assert.rejects(requestCustomModel({
+        provider: "custom", apiKey, baseUrl, model: "public-model", apiFormat,
+        reasoningEffort: null,
+      }, {
+        instructions: "system rules", input: "document", maxOutputTokens: 1600,
+      }, async () => Response.json(apiFormat === "responses" ? {
+        output: [{ type: "message", content: [{ type: "output_text", text: ["## Result", leakedUrl].join("\n\n") }] }],
+      } : {
+        choices: [{ message: { content: ["## Result", leakedUrl].join("\n\n") } }],
       }), PUBLIC_HOST_RESOLVER), (error: unknown) => {
         assert.ok(error instanceof HttpError);
         assert.equal(error.status, 502);

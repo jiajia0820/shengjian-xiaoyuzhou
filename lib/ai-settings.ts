@@ -20,6 +20,7 @@ import { decryptSecret, encryptSecret } from "./security";
 
 const DEEPSEEK_MODEL = "deepseek-v4-flash" as const;
 const DEEPSEEK_API_FORMAT = "chat_completions" as const;
+const MIN_CUSTOM_API_KEY_LENGTH = 8;
 const MAX_API_KEY_LENGTH = 500;
 const MAX_MODEL_LENGTH = 200;
 const CUSTOM_ONLY_FIELDS = ["baseUrl", "model", "apiFormat", "reasoningEffort"] as const;
@@ -74,7 +75,8 @@ function assertAiProvider(value: unknown): AiProvider {
 }
 
 function validateCustomApiKey(value: unknown): string {
-  if (typeof value !== "string" || !value || value.length > MAX_API_KEY_LENGTH || /[\s\p{Cc}]/u.test(value)) {
+  if (typeof value !== "string" || value.length < MIN_CUSTOM_API_KEY_LENGTH || value.length > MAX_API_KEY_LENGTH
+    || /[\s\p{Cc}]/u.test(value)) {
     return invalidInput("INVALID_CUSTOM_AI_KEY", "请输入有效的自定义 API Key");
   }
   return value;
