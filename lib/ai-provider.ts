@@ -265,12 +265,13 @@ function normalizeComparablePath(value: string): string {
 }
 
 function rawHttpUrlPathname(value: string): string {
-  const authorityStart = value.indexOf("://");
-  if (authorityStart < 0) return "/";
-  const afterAuthority = authorityStart + 3;
-  const pathOffset = value.slice(afterAuthority).search(/[/?#\\]/);
-  if (pathOffset < 0 || !/[\\/]/.test(value[afterAuthority + pathOffset])) return "/";
-  const pathStart = afterAuthority + pathOffset;
+  const schemeEnd = value.indexOf(":");
+  if (schemeEnd < 0) return "/";
+  let authorityStart = schemeEnd + 1;
+  while (value[authorityStart] === "/" || value[authorityStart] === "\\") authorityStart += 1;
+  const pathOffset = value.slice(authorityStart).search(/[/?#\\]/);
+  if (pathOffset < 0 || !/[\\/]/.test(value[authorityStart + pathOffset])) return "/";
+  const pathStart = authorityStart + pathOffset;
   const pathEnd = value.slice(pathStart).search(/[?#]/);
   const pathname = pathEnd < 0 ? value.slice(pathStart) : value.slice(pathStart, pathStart + pathEnd);
   return pathname.replace(/\\/g, "/");
@@ -313,7 +314,7 @@ function outputContainsBaseUrl(text: string, baseUrl: string): boolean {
   const base = comparableHttpUrl(baseUrl);
   if (!base) return false;
   const basePathnames = [base.pathname, base.rawPathname];
-  for (const match of text.matchAll(/https?:\/\/[^\s<>"\x27\x60]+/gi)) {
+  for (const match of text.matchAll(/https?:[^\s<>"\x27\x60]+/gi)) {
     for (const candidate of outputUrlCandidates(match[0])) {
       const outputUrl = comparableHttpUrl(candidate);
       if (!outputUrl || outputUrl.protocol !== base.protocol || outputUrl.hostname !== base.hostname
