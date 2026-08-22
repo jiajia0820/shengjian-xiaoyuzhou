@@ -264,15 +264,16 @@ function normalizeComparablePath(value: string): string {
   }).replace(/\/+$/, "") || "/";
 }
 
-function rawUrlPathname(value: string): string {
+function rawHttpUrlPathname(value: string): string {
   const authorityStart = value.indexOf("://");
   if (authorityStart < 0) return "/";
   const afterAuthority = authorityStart + 3;
-  const pathOffset = value.slice(afterAuthority).search(/[/?#]/);
-  if (pathOffset < 0 || value[afterAuthority + pathOffset] !== "/") return "/";
+  const pathOffset = value.slice(afterAuthority).search(/[/?#\\]/);
+  if (pathOffset < 0 || !/[\\/]/.test(value[afterAuthority + pathOffset])) return "/";
   const pathStart = afterAuthority + pathOffset;
   const pathEnd = value.slice(pathStart).search(/[?#]/);
-  return pathEnd < 0 ? value.slice(pathStart) : value.slice(pathStart, pathStart + pathEnd);
+  const pathname = pathEnd < 0 ? value.slice(pathStart) : value.slice(pathStart, pathStart + pathEnd);
+  return pathname.replace(/\\/g, "/");
 }
 
 function comparableHttpUrl(value: string): ComparableHttpUrl | null {
@@ -280,7 +281,7 @@ function comparableHttpUrl(value: string): ComparableHttpUrl | null {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     const pathname = normalizeComparablePath(url.pathname);
-    const rawPathname = normalizeComparablePath(rawUrlPathname(value));
+    const rawPathname = normalizeComparablePath(rawHttpUrlPathname(value));
     return {
       protocol: url.protocol,
       hostname: url.hostname.toLowerCase().replace(/\.+$/, ""),

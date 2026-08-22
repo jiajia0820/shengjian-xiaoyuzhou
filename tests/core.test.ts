@@ -1006,6 +1006,8 @@ test("rejects custom Base URL echoes hidden by dot-segment normalization", async
   const leakedUrls = [
     "https://api.public-provider.com/v1/../diagnostics",
     "HTTPS://API.PUBLIC-PROVIDER.COM:443/%76%31/%2e%2e/diagnostics",
+    "https://api.public-provider.com/v1\\..\\diagnostics",
+    "HTTPS://API.PUBLIC-PROVIDER.COM:443\\%76%31\\%2e%2e\\diagnostics",
   ];
   for (const apiFormat of ["responses", "chat_completions"] as const) {
     for (const leakedUrl of leakedUrls) {
