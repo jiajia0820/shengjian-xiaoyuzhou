@@ -1,5 +1,10 @@
+import {
+  buildSmsCodeRequestBody,
+  type XiaoyuzhouCaptcha,
+} from "./xiaoyuzhou-auth.ts";
+
 const API_BASE = "https://api.xiaoyuzhoufm.com";
-const PODCASTER_BASE = "https://podcaster-api.xiaoyuzhoufm.com";
+const PODCASTER_BASE = "https://web-api.xiaoyuzhoufm.com";
 const APP_USER_AGENT = "Xiaoyuzhou/2.99.1(android 28)";
 
 export type XiaoyuzhouTokens = {
@@ -83,15 +88,59 @@ async function safeJson(response: Response): Promise<Record<string, unknown>> {
 }
 
 function responseMessage(body: Record<string, unknown>, fallback: string): string {
-  return typeof body.message === "string" && body.message ? body.message : fallback;
+  for (const key of ["message", "toast", "error"]) {
+    const value = body[key];
+    if (typeof value === "string" && value.trim()) return value.trim().slice(0, 240);
+  }
+  return fallback;
 }
 
-export async function sendSmsCode(phone: string, areaCode: string): Promise<void> {
-  const response = await fetch(`${PODCASTER_BASE}/v1/auth/send-code`, {
-    method: "POST",
-    headers: webHeaders,
-    body: JSON.stringify({ mobilePhoneNumber: phone, areaCode }),
-  });
+async function fetchUpstream(
+  input: string | URL,
+  init: RequestInit,
+  code: string,
+  message: string,
+): Promise<Response> {
+  try {
+    // Keep this import lazy: the same module is also exercised by the Node test
+    // runner, where the Cloudflare-only `cloudflare:workers` specifier is
+    // installed by a test hook after static imports have been evaluated.
+    const { getRuntimeEnv } = await import("./runtime.ts");
+    const proxyUrl = getRuntimeEnv().XIAOYUZHOU_DEV_PROXY_URL?.trim();
+    const proxyToken = getRuntimeEnv().XIAOYUZHOU_DEV_PROXY_TOKEN?.trim();
+    if (!proxyUrl || !proxyToken) return await fetch(input, init);
+
+    let proxy: URL;
+    try {
+      proxy = new URL(proxyUrl);
+    } catch {
+      return await fetch(input, init);
+    }
+    if (proxy.protocol !== "http:" && proxy.protocol !== "https:") return await fetch(input, init);
+    if (!(proxy.hostname === "localhost" || proxy.hostname === "127.0.0.1" || proxy.hostname === "::1")) {
+      return await fetch(input, init);
+    }
+
+    const headers = new Headers(init.headers);
+    headers.set("x-xiaoyuzhou-target", input.toString());
+    headers.set("x-xiaoyuzhou-token", proxyToken);
+    return await fetch(proxy, { ...init, headers });
+  } catch {
+    throw new XiaoyuzhouError(code, message, 503);
+  }
+}
+
+export async function sendSmsCode(phone: string, areaCode: string, captcha: XiaoyuzhouCaptcha): Promise<void> {
+  const response = await fetchUpstream(
+    `${PODCASTER_BASE}/v1/auth/send-code`,
+    {
+      method: "POST",
+      headers: webHeaders,
+      body: JSON.stringify(buildSmsCodeRequestBody(phone, areaCode, captcha)),
+    },
+    "UPSTREAM_UNREACHABLE",
+    "小宇宙验证码服务暂时无法连接，请稍后重试",
+  );
   if (!response.ok) {
     const body = await safeJson(response);
     throw new XiaoyuzhouError("SEND_CODE_FAILED", responseMessage(body, "验证码发送失败，请检查手机号或稍后重试"), 400);
@@ -99,11 +148,16 @@ export async function sendSmsCode(phone: string, areaCode: string): Promise<void
 }
 
 export async function loginWithSms(phone: string, areaCode: string, verifyCode: string): Promise<XiaoyuzhouTokens> {
-  const response = await fetch(`${PODCASTER_BASE}/v1/auth/login-with-sms`, {
-    method: "POST",
-    headers: webHeaders,
-    body: JSON.stringify({ mobilePhoneNumber: phone, areaCode, verifyCode }),
-  });
+  const response = await fetchUpstream(
+    `${PODCASTER_BASE}/v1/auth/login-with-sms`,
+    {
+      method: "POST",
+      headers: webHeaders,
+      body: JSON.stringify({ mobilePhoneNumber: phone, areaCode, verifyCode }),
+    },
+    "UPSTREAM_UNREACHABLE",
+    "小宇宙登录服务暂时无法连接，请稍后重试",
+  );
   if (!response.ok) {
     const body = await safeJson(response);
     throw new XiaoyuzhouError("LOGIN_FAILED", responseMessage(body, "验证码错误或已过期"), 400);
@@ -117,10 +171,15 @@ export async function loginWithSms(phone: string, areaCode: string, verifyCode: 
 }
 
 export async function refreshTokens(tokens: XiaoyuzhouTokens): Promise<XiaoyuzhouTokens> {
-  const response = await fetch(`${API_BASE}/app_auth_tokens.refresh`, {
-    method: "POST",
-    headers: appHeaders({ refreshToken: tokens.refreshToken, deviceId: tokens.deviceId }),
-  });
+  const response = await fetchUpstream(
+    `${API_BASE}/app_auth_tokens.refresh`,
+    {
+      method: "POST",
+      headers: appHeaders({ refreshToken: tokens.refreshToken, deviceId: tokens.deviceId }),
+    },
+    "UPSTREAM_UNREACHABLE",
+    "小宇宙授权服务暂时无法连接，请稍后重试",
+  );
   if (!response.ok) throw new XiaoyuzhouError("AUTH_EXPIRED", "小宇宙授权已失效，请重新连接账号", 401);
   const body = await safeJson(response);
   const accessToken = response.headers.get("x-jike-access-token") || (body["x-jike-access-token"] as string | undefined);
@@ -130,7 +189,12 @@ export async function refreshTokens(tokens: XiaoyuzhouTokens): Promise<Xiaoyuzho
 }
 
 async function authenticatedRequest(path: string, tokens: XiaoyuzhouTokens, init: RequestInit): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE}${path}`, { ...init, headers: appHeaders(tokens) });
+  const response = await fetchUpstream(
+    `${API_BASE}${path}`,
+    { ...init, headers: appHeaders(tokens) },
+    "UPSTREAM_UNREACHABLE",
+    "小宇宙接口暂时无法连接，请稍后重试",
+  );
   if (response.status === 401) throw new XiaoyuzhouError("AUTH_EXPIRED", "小宇宙授权已过期", 401);
   if (!response.ok) throw new XiaoyuzhouError("UPSTREAM_ERROR", `小宇宙接口暂时不可用（${response.status}）`);
   return safeJson(response);
@@ -143,13 +207,14 @@ function objectValue(value: unknown): Record<string, unknown> {
 export async function getOfficialEpisode(eid: string, tokens: XiaoyuzhouTokens): Promise<OfficialEpisode> {
   const response = await authenticatedRequest(`/v1/episode/get?eid=${encodeURIComponent(eid)}`, tokens, { method: "GET" });
   const episode = objectValue(response.data);
+  const episodeId = episode.eid || episode.id;
   const podcast = objectValue(episode.podcast);
   const media = objectValue(episode.media);
   const transcript = objectValue(episode.transcript);
   const mediaId = episode.transcriptMediaId || transcript.mediaId || media.id;
-  if (!episode.eid || !episode.title) throw new XiaoyuzhouError("EPISODE_NOT_FOUND", "没有找到这个小宇宙单集", 404);
+  if (!episodeId || !episode.title) throw new XiaoyuzhouError("EPISODE_NOT_FOUND", "没有找到这个小宇宙单集", 404);
   return {
-    eid: String(episode.eid),
+    eid: String(episodeId),
     title: String(episode.title),
     podcastTitle: String(podcast.title || "未知节目"),
     shownotesHtml: typeof episode.shownotes === "string" ? episode.shownotes : "",
@@ -175,7 +240,12 @@ export async function getTranscriptSegments(eid: string, mediaId: string, tokens
   if (url.protocol !== "https:" || ["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
     throw new XiaoyuzhouError("TRANSCRIPT_URL_INVALID", "小宇宙返回了不安全的文稿地址");
   }
-  const transcriptResponse = await fetch(url, { headers: { "user-agent": APP_USER_AGENT }, redirect: "follow" });
+  const transcriptResponse = await fetchUpstream(
+    url,
+    { headers: { "user-agent": APP_USER_AGENT }, redirect: "follow" },
+    "TRANSCRIPT_FETCH_FAILED",
+    "官方文稿下载服务暂时无法连接，请稍后重试",
+  );
   if (!transcriptResponse.ok) {
     throw new XiaoyuzhouError("TRANSCRIPT_FETCH_FAILED", `官方文稿下载失败（${transcriptResponse.status}）`);
   }

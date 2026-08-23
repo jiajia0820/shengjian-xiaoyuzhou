@@ -58,6 +58,19 @@ npm run db:generate
 4. 执行 `npm run lint`、`npx tsc --noEmit` 和 `npm test`。
 5. 生产环境推荐使用 Sites/Cloudflare Workers 运行时；本项目依赖 D1、R2 和 Workers 绑定，不能仅通过 GitHub Pages 运行。
 
+## 来源与修改说明
+
+本仓库基于[声笺原始项目](https://shengjian-xiaoyuzhou.yywu0512.chatgpt.site/)的公开源码继续开发，原始项目由 `yywu0512` 发布。Git 历史保留了原始源码基线提交 `a57dd45`，本仓库不将上游代码声称为原创。
+
+在原始基线上，本仓库主要增加或修改了：
+
+- 小宇宙验证码、登录、授权刷新和官方单集数据兼容；
+- 自定义 OpenAI-compatible API，以及 Responses/Chat Completions 两种格式；
+- 本地签名上游代理、公网目标校验和自定义 API 安全边界；
+- 双提供商设置、分析结果元数据和相关回归测试。
+
+原始源码基线中未发现 `LICENSE` 文件。本仓库不替上游作者臆造许可证；如需再分发、部署为公共服务或商用，请先确认原作者的许可或授权。详细来源说明见 [`NOTICE.md`](NOTICE.md)。
+
 ### 安全边界
 
 本仓库只包含可复现源码、迁移文件和配置模板。每位部署者必须使用自己的小宇宙账号、AI 提供商 API Key、Supabase/Tencent Cloud 凭据和存储资源。不要把 `.env`、访问令牌、Cookie、数据库导出、完整 API Key 或文稿正文提交到仓库。

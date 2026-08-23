@@ -1,7 +1,11 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, downloadWithAuth, type Viewer } from "@/lib/auth-client";
+import XiaoyuzhouCaptcha, {
+  type XiaoyuzhouCaptchaHandle,
+  type XiaoyuzhouCaptchaToken,
+} from "@/app/xiaoyuzhou-captcha";
 
 type AccountStatus = { connected: boolean; phoneHint: string | null; connectedAt: string | null; displayName: string };
 type AiProvider = "deepseek" | "custom";
@@ -106,6 +110,7 @@ export default function Workspace({
   const [code, setCode] = useState("");
   const [codeSent, setCodeSent] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const captchaRef = useRef<XiaoyuzhouCaptchaHandle>(null);
   const [selected, setSelected] = useState<Episode | null>(null);
   const [markdown, setMarkdown] = useState("");
   const [editorMode, setEditorMode] = useState<"preview" | "edit">("preview");
@@ -208,9 +213,16 @@ export default function Workspace({
     }
     setConnecting(true);
     try {
+      const captcha: XiaoyuzhouCaptchaToken | undefined = await captchaRef.current?.requestToken();
+      if (!captcha) throw new Error("请先完成安全验证");
+      const { scene: captchaScene, verifyParam: captchaVerifyParam } = captcha;
       await responseJson(await apiFetch("/api/account/send-code", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ areaCode, phone: phone.trim() }),
+        body: JSON.stringify({
+          areaCode,
+          phone: phone.trim(),
+          captcha: { scene: captchaScene, verifyParam: captchaVerifyParam },
+        }),
       }));
       setCodeSent(true);
       setNotice({ kind: "success", text: "验证码已发送，请查看手机" });
@@ -760,7 +772,7 @@ export default function Workspace({
             <button className="modal-close" type="button" onClick={() => setConnectOpen(false)} aria-label="关闭">×</button>
             <span className="modal-kicker">PRIVATE CONNECTION</span>
             <h2 id="connect-title">连接小宇宙账号</h2>
-            <p>官方文稿接口需要账号授权。验证码和令牌只在服务端处理，令牌加密保存。</p>
+            <p>官方文稿接口需要账号授权。发送短信前会进行一次安全验证，令牌仅在服务端加密保存。</p>
             <div className="phone-row">
               <label><span>区号</span><input value={areaCode} onChange={(event) => setAreaCode(event.target.value)} /></label>
               <label className="phone-input"><span>手机号</span><input inputMode="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="请输入手机号" /></label>
@@ -777,6 +789,7 @@ export default function Workspace({
             )}
             {codeSent && <button className="text-action" type="button" disabled={connecting} onClick={() => void sendCode()}>重新发送验证码</button>}
             <small>继续即表示仅授权本网站读取你主动提交的单集官方文稿。</small>
+            <XiaoyuzhouCaptcha ref={captchaRef} />
           </form>
         </div>
       )}

@@ -10,10 +10,20 @@ const { d1, r2 } = hostingConfig;
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
+const devXiaoyuzhouProxyUrl = process.env.XIAOYUZHOU_DEV_PROXY_URL?.trim();
+const devXiaoyuzhouProxyToken = process.env.XIAOYUZHOU_DEV_PROXY_TOKEN?.trim();
 
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
+  ...(devXiaoyuzhouProxyUrl && devXiaoyuzhouProxyToken
+    ? {
+        vars: {
+          XIAOYUZHOU_DEV_PROXY_URL: devXiaoyuzhouProxyUrl,
+          XIAOYUZHOU_DEV_PROXY_TOKEN: devXiaoyuzhouProxyToken,
+        },
+      }
+    : {}),
   d1_databases: d1
     ? [
         {

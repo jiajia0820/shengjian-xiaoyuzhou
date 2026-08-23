@@ -13,6 +13,10 @@ export type AppEnv = {
   TENCENT_SECRET_KEY?: string;
   ORIGIN_GATEWAY_SECRET?: string;
   APP_PUBLIC_HOST?: string;
+  /** Local-only host proxy injected by scripts/dev.mjs. */
+  XIAOYUZHOU_DEV_PROXY_URL?: string;
+  /** Local-only shared secret for the development upstream proxy. */
+  XIAOYUZHOU_DEV_PROXY_TOKEN?: string;
 };
 
 export function getRuntimeEnv(): AppEnv {

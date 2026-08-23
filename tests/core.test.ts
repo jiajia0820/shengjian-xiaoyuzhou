@@ -7,7 +7,17 @@ import { buildAnalysisMarkdown, splitForAnalysis } from "../lib/analysis-format.
 import { SYSTEM_FRAMEWORK, validateFrameworkInput } from "../lib/frameworks.ts";
 import { buildMarkdown, formatTimestamp, shownotesToMarkdown } from "../lib/markdown.ts";
 import { decryptSecret, encryptSecret, phoneHint, sha256Hex } from "../lib/security.ts";
-import { parseEpisodeUrl, XiaoyuzhouError } from "../lib/xiaoyuzhou.ts";
+import {
+  getOfficialEpisode,
+  parseEpisodeUrl,
+  sendSmsCode,
+  XiaoyuzhouError,
+} from "../lib/xiaoyuzhou.ts";
+import {
+  buildSmsCodeRequestBody,
+  normalizeXiaoyuzhouCaptcha,
+  withTimeout,
+} from "../lib/xiaoyuzhou-auth.ts";
 import { isAllowedOrigin, parseCookieHeader, serializeCookie } from "../lib/request-security-core.ts";
 import { anonymousTokenHash, createAnonymousToken } from "../lib/anonymous-auth-core.ts";
 import {
@@ -15,6 +25,7 @@ import {
   normalizeCustomBaseUrl,
   requestCustomModel,
   requestDeepseekModel,
+  resolveHostnameViaDoh,
 } from "../lib/ai-provider.ts";
 import type { DeepseekAiRuntimeConfig } from "../lib/ai-provider.ts";
 import { HttpError } from "../lib/http-error.ts";
@@ -82,7 +93,12 @@ class SqliteD1Database {
 }
 
 declare global {
-  var __aiProviderTestEnv: { DB: SqliteD1Database; TOKEN_ENCRYPTION_KEY?: string } | undefined;
+  var __aiProviderTestEnv: {
+    DB: SqliteD1Database;
+    TOKEN_ENCRYPTION_KEY?: string;
+    XIAOYUZHOU_DEV_PROXY_URL?: string;
+    XIAOYUZHOU_DEV_PROXY_TOKEN?: string;
+  } | undefined;
   var __analysisGenerateRouteTestDeps: Record<string, Record<string, unknown>> | undefined;
 }
 
@@ -652,6 +668,52 @@ test("sends a custom Responses request without following redirects", async () =>
   assert.equal(response.model, "gpt-5.6-luna");
 });
 
+test("routes local custom model requests through the signed development proxy", async () => {
+  const previousEnv = globalThis.__aiProviderTestEnv;
+  const previousFetch = globalThis.fetch;
+  const testEnv = previousEnv ?? { DB: new SqliteD1Database(new DatabaseSync(":memory:")) };
+  const previousProxyUrl = testEnv.XIAOYUZHOU_DEV_PROXY_URL;
+  const previousProxyToken = testEnv.XIAOYUZHOU_DEV_PROXY_TOKEN;
+  try {
+    globalThis.__aiProviderTestEnv = testEnv;
+    testEnv.XIAOYUZHOU_DEV_PROXY_URL = "http://127.0.0.1:4567/__xiaoyuzhou_upstream";
+    testEnv.XIAOYUZHOU_DEV_PROXY_TOKEN = "local-proxy-token";
+    globalThis.fetch = async (input, init) => {
+      const request = new Request(input, init);
+      assert.equal(request.url, "http://127.0.0.1:4567/__xiaoyuzhou_upstream");
+      assert.equal(request.headers.get("x-xiaoyuzhou-target"), "https://relay.example/v1/responses");
+      assert.equal(request.headers.get("x-xiaoyuzhou-token"), "local-proxy-token");
+      assert.equal(request.headers.get("authorization"), "Bearer relay-key");
+      assert.equal(init?.redirect, "manual");
+      return Response.json({
+        output: [{ type: "message", content: [{ type: "output_text", text: "## Result" }] }],
+      });
+    };
+
+    const response = await requestCustomModel({
+      provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
+      model: "gpt-5.6-luna", apiFormat: "responses", reasoningEffort: "medium",
+    }, {
+      instructions: "system rules", input: "document", maxOutputTokens: 1600,
+    }, globalThis.fetch, PUBLIC_HOST_RESOLVER);
+    assert.equal(response.text, "## Result");
+  } finally {
+    globalThis.fetch = previousFetch;
+    testEnv.XIAOYUZHOU_DEV_PROXY_URL = previousProxyUrl;
+    testEnv.XIAOYUZHOU_DEV_PROXY_TOKEN = previousProxyToken;
+    globalThis.__aiProviderTestEnv = previousEnv;
+  }
+});
+
+test("accepts safe HTTPS custom provider targets in the local proxy", async () => {
+  const source = await readFile(new URL("../scripts/dev-upstream-proxy.mjs", import.meta.url), "utf8");
+  assert.match(source, /export function isAllowedTarget/);
+  assert.match(source, /hostname === "relay\.example"|isPublicHostname/);
+  assert.match(source, /target\.protocol !== "https:"/);
+  assert.match(source, /target\.username \|\| target\.password/);
+  assert.match(source, /127\.0\.0\.1/);
+});
+
 test("reads a custom Chat Completions response without a DeepSeek thinking field", async () => {
   const response = await requestCustomModel({
     provider: "custom", apiKey: "relay-key", baseUrl: "https://relay.example/v1",
@@ -868,6 +930,44 @@ test("resolves only a hostname through fixed short-lived DNS-over-HTTPS requests
   });
   assert.deepEqual(requestedTypes.sort(), ["A", "AAAA"]);
   assert.deepEqual(addresses.sort(), ["2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34"]);
+});
+
+test("routes local DNS-over-HTTPS checks through the signed development proxy", async () => {
+  const previousEnv = globalThis.__aiProviderTestEnv;
+  const previousFetch = globalThis.fetch;
+  const testEnv = previousEnv ?? { DB: new SqliteD1Database(new DatabaseSync(":memory:")) };
+  const previousProxyUrl = testEnv.XIAOYUZHOU_DEV_PROXY_URL;
+  const previousProxyToken = testEnv.XIAOYUZHOU_DEV_PROXY_TOKEN;
+  const requests: string[] = [];
+  try {
+    globalThis.__aiProviderTestEnv = testEnv;
+    testEnv.XIAOYUZHOU_DEV_PROXY_URL = "http://127.0.0.1:4567/__xiaoyuzhou_upstream";
+    testEnv.XIAOYUZHOU_DEV_PROXY_TOKEN = "local-proxy-token";
+    globalThis.fetch = async (input, init) => {
+      const request = new Request(input, init);
+      assert.equal(request.url, "http://127.0.0.1:4567/__xiaoyuzhou_upstream");
+      assert.equal(request.headers.get("x-xiaoyuzhou-token"), "local-proxy-token");
+      const target = request.headers.get("x-xiaoyuzhou-target");
+      assert.ok(target);
+      requests.push(target);
+      const targetUrl = new URL(target);
+      return Response.json(targetUrl.searchParams.get("type") === "A"
+        ? { Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] }
+        : { Status: 0, Answer: [{ type: 28, data: "2606:2800:220:1:248:1893:25c8:1946" }] });
+    };
+
+    const addresses = await resolveHostnameViaDoh("api.public-provider.com");
+    assert.deepEqual(requests.sort(), [
+      "https://cloudflare-dns.com/dns-query?name=api.public-provider.com&type=A",
+      "https://cloudflare-dns.com/dns-query?name=api.public-provider.com&type=AAAA",
+    ]);
+    assert.deepEqual(addresses.sort(), ["2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34"]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    testEnv.XIAOYUZHOU_DEV_PROXY_URL = previousProxyUrl;
+    testEnv.XIAOYUZHOU_DEV_PROXY_TOKEN = previousProxyToken;
+    globalThis.__aiProviderTestEnv = previousEnv;
+  }
 });
 
 test("rejects custom Responses and Chat outputs that echo this request's key or base URL", async () => {
@@ -1287,6 +1387,37 @@ test("accepts only canonical Xiaoyuzhou episode links", () => {
   assert.throws(() => parseEpisodeUrl("http://www.xiaoyuzhoufm.com/episode/6a7e91ff36641f136d8807ab"), XiaoyuzhouError);
 });
 
+test("accepts the current Xiaoyuzhou episode response id field", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({
+      data: {
+        id: "67fc60374d8edb5eb86d6026",
+        title: "36. 对话 AI 产品经理 Zara",
+        podcast: { title: "职场药丸" },
+        transcript: { mediaId: "5fc12a24dee9c1e16dfa4090/li6_sY0Z2KSoJDqzOnBGHUdBIIsW.mp4a" },
+        duration: 2880,
+        pubDate: "2025-04-14T00:00:00.000Z",
+      },
+    });
+    assert.deepEqual(await getOfficialEpisode("67fc60374d8edb5eb86d6026", {
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      deviceId: "device-id",
+    }), {
+      eid: "67fc60374d8edb5eb86d6026",
+      title: "36. 对话 AI 产品经理 Zara",
+      podcastTitle: "职场药丸",
+      shownotesHtml: "",
+      durationSeconds: 2880,
+      publishedAt: "2025-04-14T00:00:00.000Z",
+      mediaId: "5fc12a24dee9c1e16dfa4090/li6_sY0Z2KSoJDqzOnBGHUdBIIsW.mp4a",
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("formats timestamped Markdown without rewriting transcript text", () => {
   const markdown = buildMarkdown({
     eid: "6a7e91ff36641f136d8807ab",
@@ -1361,6 +1492,146 @@ test("adds server-owned frontmatter to AI Markdown", () => {
   assert.match(markdown, /model: "gpt-5.6-luna"/);
   assert.doesNotMatch(markdown, /relay\.example|relay-secret/);
   assert.match(markdown, /# 如何建立统计直觉｜内容梳理/);
+});
+
+test("normalizes only usable Xiaoyuzhou captcha tickets", () => {
+  assert.deepEqual(normalizeXiaoyuzhouCaptcha({
+    scene: "web",
+    verifyParam: "  captcha-token  ",
+  }), {
+    scene: "web",
+    verifyParam: "captcha-token",
+  });
+  assert.deepEqual(normalizeXiaoyuzhouCaptcha({ scene: "h5", verifyParam: "mobile-token" }), {
+    scene: "h5",
+    verifyParam: "mobile-token",
+  });
+  for (const value of [
+    null,
+    {},
+    { scene: "desktop", verifyParam: "token" },
+    { scene: "web", verifyParam: "" },
+    { scene: "web", verifyParam: "x".repeat(4097) },
+  ]) {
+    assert.equal(normalizeXiaoyuzhouCaptcha(value), null);
+  }
+});
+
+test("fails a stalled browser captcha load instead of waiting forever", async () => {
+  await assert.rejects(
+    withTimeout(new Promise<void>(() => undefined), 5, "安全验证组件加载超时"),
+    (error: unknown) => error instanceof Error && error.message === "安全验证组件加载超时",
+  );
+});
+
+test("builds the current Xiaoyuzhou SMS request shape", () => {
+  assert.deepEqual(buildSmsCodeRequestBody("13800138000", "+86", {
+    scene: "web",
+    verifyParam: "captcha-token",
+  }), {
+    mobilePhoneNumber: "13800138000",
+    areaCode: "+86",
+    captcha: { scene: "web", verifyParam: "captcha-token" },
+  });
+});
+
+test("maps Xiaoyuzhou SMS upstream responses without leaking transport errors", async () => {
+  const previousFetch = globalThis.fetch;
+  let request: Request | undefined;
+  try {
+    globalThis.fetch = async (input, init) => {
+      request = new Request(input, init);
+      return Response.json({ code: 1, toast: "验证码验证失败" }, { status: 400 });
+    };
+    await assert.rejects(
+      sendSmsCode("13800138000", "+86", { scene: "web", verifyParam: "captcha-token" }),
+      (error: unknown) => error instanceof XiaoyuzhouError
+        && error.code === "SEND_CODE_FAILED"
+        && error.status === 400
+        && error.message === "验证码验证失败",
+    );
+    assert.equal(request?.url, "https://web-api.xiaoyuzhoufm.com/v1/auth/send-code");
+    assert.deepEqual(await request?.json(), {
+      mobilePhoneNumber: "13800138000",
+      areaCode: "+86",
+      captcha: { scene: "web", verifyParam: "captcha-token" },
+    });
+
+    globalThis.fetch = async () => { throw new Error("proxy connection refused"); };
+    await assert.rejects(
+      sendSmsCode("13800138000", "+86", { scene: "web", verifyParam: "captcha-token" }),
+      (error: unknown) => error instanceof XiaoyuzhouError
+        && error.code === "UPSTREAM_UNREACHABLE"
+        && error.status === 503
+        && error.message === "小宇宙验证码服务暂时无法连接，请稍后重试",
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("routes local Xiaoyuzhou requests through the signed host proxy", async () => {
+  const previousEnv = globalThis.__aiProviderTestEnv;
+  const previousFetch = globalThis.fetch;
+  const testEnv = previousEnv ?? { DB: new SqliteD1Database(new DatabaseSync(":memory:")) };
+  const previousProxyUrl = testEnv.XIAOYUZHOU_DEV_PROXY_URL;
+  const previousProxyToken = testEnv.XIAOYUZHOU_DEV_PROXY_TOKEN;
+  let request: Request | undefined;
+  try {
+    globalThis.__aiProviderTestEnv = testEnv;
+    testEnv.XIAOYUZHOU_DEV_PROXY_URL = "http://127.0.0.1:4567/__xiaoyuzhou_upstream";
+    testEnv.XIAOYUZHOU_DEV_PROXY_TOKEN = "local-proxy-token";
+    globalThis.fetch = async (input, init) => {
+      request = new Request(input, init);
+      return Response.json({}, { status: 200 });
+    };
+
+    await sendSmsCode("13800138000", "+86", { scene: "web", verifyParam: "captcha-token" });
+
+    assert.equal(request?.url, "http://127.0.0.1:4567/__xiaoyuzhou_upstream");
+    assert.equal(request?.headers.get("x-xiaoyuzhou-target"), "https://web-api.xiaoyuzhoufm.com/v1/auth/send-code");
+    assert.equal(request?.headers.get("x-xiaoyuzhou-token"), "local-proxy-token");
+    assert.equal(request?.headers.get("origin"), "https://podcaster.xiaoyuzhoufm.com");
+  } finally {
+    globalThis.fetch = previousFetch;
+    testEnv.XIAOYUZHOU_DEV_PROXY_URL = previousProxyUrl;
+    testEnv.XIAOYUZHOU_DEV_PROXY_TOKEN = previousProxyToken;
+    globalThis.__aiProviderTestEnv = previousEnv;
+  }
+});
+
+test("wires the browser captcha into the Xiaoyuzhou SMS flow", async () => {
+  const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
+  const captcha = await readFile(new URL("../app/xiaoyuzhou-captcha.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const route = await readFile(new URL("../app/api/account/send-code/route.ts", import.meta.url), "utf8");
+  assert.match(workspace, /XiaoyuzhouCaptchaHandle/);
+  assert.match(workspace, /requestToken\(\)/);
+  assert.match(workspace, /captcha:\s*\{\s*scene:\s*captchaScene/);
+  assert.match(captcha, /AliyunCaptcha\.js/);
+  assert.match(captcha, /window\.AliyunCaptchaConfig\s*=\s*\{\s*region:\s*"cn",\s*prefix:\s*"kn7vz1"\s*\}/);
+  assert.match(captcha, /initAliyunCaptcha/);
+  assert.match(captcha, /安全验证组件加载超时/);
+  assert.match(captcha, /has-error/);
+  assert.match(styles, /\.notice\s*\{[^}]*z-index:\s*140/);
+  assert.match(captcha, /80c00qbb/);
+  assert.match(captcha, /hdb4s8qu/);
+  assert.doesNotMatch(captcha, /console\.(?:log|error|warn).*verifyParam/);
+  assert.match(route, /INVALID_CAPTCHA/);
+});
+
+test("keeps local Worker development compatible with the configured HTTPS proxy", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as {
+    scripts?: { dev?: string };
+  };
+  const devRunner = await readFile(new URL("../scripts/dev.mjs", import.meta.url), "utf8");
+  const upstreamProxy = await readFile(new URL("../scripts/dev-upstream-proxy.mjs", import.meta.url), "utf8");
+  assert.equal(packageJson.scripts?.dev, "node scripts/dev.mjs");
+  assert.match(devRunner, /NODE_USE_ENV_PROXY/);
+  assert.match(devRunner, /vinext(?:\.cmd)?/);
+  assert.match(upstreamProxy, /content-encoding/);
+  assert.match(upstreamProxy, /xyzcdn\.net/);
+  assert.match(upstreamProxy, /cloudflare-dns\.com/);
 });
 
 test("keeps custom provider credentials out of generated analysis artifacts", async () => {

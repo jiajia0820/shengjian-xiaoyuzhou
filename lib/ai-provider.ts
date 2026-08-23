@@ -41,6 +41,8 @@ const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const MODEL_TIMEOUT_MS = 120_000;
 const DNS_TIMEOUT_MS = 5_000;
 const DNS_OVER_HTTPS_URL = "https://cloudflare-dns.com/dns-query";
+const DEV_PROXY_TARGET_HEADER = "x-xiaoyuzhou-target";
+const DEV_PROXY_TOKEN_HEADER = "x-xiaoyuzhou-token";
 
 type DeepseekClientOptions = {
   apiKey: string;
@@ -180,6 +182,41 @@ type DnsJsonResponse = {
   Answer?: Array<{ type?: unknown; data?: unknown }>;
 };
 
+async function fetchThroughDevProxy(
+  input: URL,
+  init: RequestInit,
+  fetchImplementation: typeof fetch,
+): Promise<Response> {
+  let proxyUrl = "";
+  let proxyToken = "";
+  try {
+    const { getRuntimeEnv } = await import("./runtime.ts");
+    const runtime = getRuntimeEnv();
+    proxyUrl = runtime.XIAOYUZHOU_DEV_PROXY_URL?.trim() ?? "";
+    proxyToken = runtime.XIAOYUZHOU_DEV_PROXY_TOKEN?.trim() ?? "";
+  } catch {
+    // The runtime binding is not available in the standalone Node test runner.
+  }
+  if (!proxyUrl || !proxyToken || fetchImplementation !== globalThis.fetch) {
+    return fetchImplementation(input, init);
+  }
+
+  let proxy: URL;
+  try {
+    proxy = new URL(proxyUrl);
+  } catch {
+    return fetchImplementation(input, init);
+  }
+  if ((proxy.protocol !== "http:" && proxy.protocol !== "https:")
+    || !["localhost", "127.0.0.1", "::1"].includes(proxy.hostname)) {
+    return fetchImplementation(input, init);
+  }
+  const headers = new Headers(init.headers);
+  headers.set(DEV_PROXY_TARGET_HEADER, input.toString());
+  headers.set(DEV_PROXY_TOKEN_HEADER, proxyToken);
+  return fetchImplementation(proxy, { ...init, headers });
+}
+
 export async function resolveHostnameViaDoh(
   hostname: string,
   fetchImplementation: typeof fetch = fetch,
@@ -188,11 +225,11 @@ export async function resolveHostnameViaDoh(
     const resolverUrl = new URL(DNS_OVER_HTTPS_URL);
     resolverUrl.searchParams.set("name", hostname);
     resolverUrl.searchParams.set("type", recordType);
-    const response = await fetchImplementation(resolverUrl, {
+    const response = await fetchThroughDevProxy(resolverUrl, {
       headers: { Accept: "application/dns-json" },
       redirect: "manual",
       signal: AbortSignal.timeout(DNS_TIMEOUT_MS),
-    });
+    }, fetchImplementation);
     if (!response.ok) throw new Error("DNS_RESOLUTION_FAILED");
     const payload = await response.json() as DnsJsonResponse;
     if (payload.Status !== 0) return [];
@@ -481,7 +518,7 @@ export async function requestCustomModel(
   const prepared = buildCustomModelRequest(runtimeConfig, request);
   let response: Response;
   try {
-    response = await fetchImplementation(prepared.url, {
+    response = await fetchThroughDevProxy(new URL(prepared.url), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
@@ -490,7 +527,7 @@ export async function requestCustomModel(
       body: JSON.stringify(prepared.body),
       redirect: "manual",
       signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
-    });
+    }, fetchImplementation);
   } catch (error) {
     const name = error instanceof Error ? error.name : "";
     if (name === "AbortError" || name === "TimeoutError") {
