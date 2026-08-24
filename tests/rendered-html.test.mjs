@@ -43,6 +43,31 @@ test("stores a transcript.json sidecar beside each episode document", async () =
   assert.match(documents, /transcriptKey: `\$\{base\}\/transcript\.json`/);
 });
 
+test("wires a local-only speaker review panel into the transcript toolbar", async () => {
+  const [workspace, panel, client, styles] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/speaker-diarization-panel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/local-speaker-client.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /SpeakerDiarizationPanel/);
+  assert.match(panel, /从本地音频识别说话人/);
+  assert.match(panel, /aria-label="选择本地音频"/);
+  assert.match(panel, /\/speakers\/preview/);
+  assert.match(panel, /\/speakers`/);
+  assert.match(panel, /const \[turns, setTurns\] = useState<LocalSpeakerTurn\[\]>\(\[\]\)/);
+  assert.match(panel, /setTurns\(current\.segments\)/);
+  assert.match(panel, /JSON\.stringify\(\{ turns, labels, overrides/);
+  assert.match(panel, /音频不会上传/);
+  assert.match(panel, /取消本地任务/);
+  assert.match(styles, /\.speaker-diarization-modal\s*\{[^}]*max-height:/);
+  assert.match(styles, /\.speaker-review-list\s*\{[^}]*overflow-y:\s*auto/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.speaker-label-grid/);
+  assert.match(panel, /aria-live="polite"/);
+  assert.doesNotMatch(panel, /apiFetch\(LOCAL_SPEAKER/);
+  assert.doesNotMatch(client, /credentials:\s*["']include["']/);
+});
+
 test("keeps browser auth same-origin and packages the Hong Kong gateway", async () => {
   const authShell = await readFile(new URL("../app/auth-shell.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(authShell, /supabase\.co|challenges\.cloudflare\.com|turnstile/i);

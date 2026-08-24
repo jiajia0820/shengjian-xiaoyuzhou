@@ -6,6 +6,7 @@ import XiaoyuzhouCaptcha, {
   type XiaoyuzhouCaptchaHandle,
   type XiaoyuzhouCaptchaToken,
 } from "@/app/xiaoyuzhou-captcha";
+import { SpeakerDiarizationPanel } from "@/app/speaker-diarization-panel";
 
 type AccountStatus = { connected: boolean; phoneHint: string | null; connectedAt: string | null; displayName: string };
 type AiProvider = "deepseek" | "custom";
@@ -117,6 +118,7 @@ export default function Workspace({
   const [documentTab, setDocumentTab] = useState<DocumentTab>("transcript");
   const [documentLoading, setDocumentLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [speakerProcessing, setSpeakerProcessing] = useState(false);
   const [deletingEid, setDeletingEid] = useState<string | null>(null);
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
   const [analysisMarkdown, setAnalysisMarkdown] = useState("");
@@ -920,29 +922,35 @@ export default function Workspace({
         <div className="document-drawer" role="dialog" aria-modal="true" aria-labelledby="document-title">
           <div className="drawer-header">
             <div><span>{selected.podcastTitle}</span><h2 id="document-title">{selected.title}</h2></div>
-            <button className="drawer-close" type="button" onClick={() => setSelected(null)} aria-label="关闭文稿">×</button>
+            <button className="drawer-close" type="button" disabled={speakerProcessing} onClick={() => setSelected(null)} aria-label="关闭文稿">×</button>
           </div>
           <nav className="document-tabs" aria-label="文稿内容">
-            <button className={documentTab === "transcript" ? "active" : ""} type="button" onClick={() => switchDocumentTab("transcript")}>文稿</button>
-            <button className={documentTab === "summary" ? "active" : ""} type="button" onClick={() => switchDocumentTab("summary")}>内容梳理</button>
-            <button className={documentTab === "learning_prompt" ? "active" : ""} type="button" onClick={() => switchDocumentTab("learning_prompt")}>学习 Prompt</button>
+            <button className={documentTab === "transcript" ? "active" : ""} type="button" disabled={speakerProcessing} onClick={() => switchDocumentTab("transcript")}>文稿</button>
+            <button className={documentTab === "summary" ? "active" : ""} type="button" disabled={speakerProcessing} onClick={() => switchDocumentTab("summary")}>内容梳理</button>
+            <button className={documentTab === "learning_prompt" ? "active" : ""} type="button" disabled={speakerProcessing} onClick={() => switchDocumentTab("learning_prompt")}>学习 Prompt</button>
           </nav>
 
           {documentTab === "transcript" ? (
             <div className="document-toolbar">
               <div className="mode-switch">
-                <button className={editorMode === "preview" ? "active" : ""} type="button" onClick={() => setEditorMode("preview")}>阅读</button>
-                <button className={editorMode === "edit" ? "active" : ""} type="button" onClick={() => setEditorMode("edit")}>编辑 Markdown</button>
+                <button className={editorMode === "preview" ? "active" : ""} type="button" disabled={speakerProcessing} onClick={() => setEditorMode("preview")}>阅读</button>
+                <button className={editorMode === "edit" ? "active" : ""} type="button" disabled={speakerProcessing} onClick={() => setEditorMode("edit")}>编辑 Markdown</button>
               </div>
               <div className="document-actions">
-                <button type="button" onClick={() => void copyText(markdown, "Markdown 已复制")}>复制</button>
-                <button type="button" onClick={() => void downloadFile(`/api/episodes/${selected.eid}/download`, `${selected.title}.md`)}>下载 .md</button>
-                <button type="button" disabled={importing} onClick={() => void importEpisode(undefined, true)}>重新获取原稿</button>
-                <button type="button" disabled={saving} onClick={() => void restoreOriginal()}>恢复原稿</button>
+                <button type="button" disabled={speakerProcessing} onClick={() => void copyText(markdown, "Markdown 已复制")}>复制</button>
+                <button type="button" disabled={speakerProcessing} onClick={() => void downloadFile(`/api/episodes/${selected.eid}/download`, `${selected.title}.md`)}>下载 .md</button>
+                <button type="button" disabled={importing || speakerProcessing} onClick={() => void importEpisode(undefined, true)}>重新获取原稿</button>
+                <button type="button" disabled={saving || speakerProcessing} onClick={() => void restoreOriginal()}>恢复原稿</button>
+                <SpeakerDiarizationPanel
+                  episode={selected}
+                  onSaved={(nextMarkdown) => { setMarkdown(nextMarkdown); setEditorMode("preview"); void loadEpisodes(); }}
+                  reportNotice={setNotice}
+                  onBusyChange={setSpeakerProcessing}
+                />
                 <button className="danger-button" type="button"
-                  disabled={deletingEid === selected.eid || saving || generating || importing}
+                  disabled={deletingEid === selected.eid || saving || generating || importing || speakerProcessing}
                   onClick={() => void deleteEpisode()}>{deletingEid === selected.eid ? "删除中…" : "删除文稿"}</button>
-                {editorMode === "edit" && <button className="save-button" type="button" disabled={saving} onClick={() => void saveDocument()}>{saving ? "保存中…" : "保存编辑"}</button>}
+                {editorMode === "edit" && <button className="save-button" type="button" disabled={saving || speakerProcessing} onClick={() => void saveDocument()}>{saving ? "保存中…" : "保存编辑"}</button>}
               </div>
             </div>
           ) : (
