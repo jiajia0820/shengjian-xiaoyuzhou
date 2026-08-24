@@ -68,6 +68,24 @@ test("wires a local-only speaker review panel into the transcript toolbar", asyn
   assert.doesNotMatch(client, /credentials:\s*["']include["']/);
 });
 
+test("shows chunk progress for long local speaker jobs", async () => {
+  const panel = await readFile(new URL("../app/speaker-diarization-panel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /第 \$\{chunkIndex\}\/\$\{chunkCount\} 块/);
+});
+
+test("selects CUDA packages when an NVIDIA GPU is available", async () => {
+  const [setup, start] = await Promise.all([
+    readFile(new URL("../scripts/setup-local-speaker-service.ps1", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/start-local-speaker-service.ps1", import.meta.url), "utf8"),
+  ]);
+  assert.match(setup, /nvidia-smi/);
+  assert.match(setup, /SPEAKER_TORCH_INDEX_URL/);
+  assert.match(setup, /cu128/);
+  assert.match(setup, /download\.pytorch\.org\/whl\/cpu/);
+  assert.match(start, /SPEAKER_DEVICE/);
+  assert.match(start, /auto/);
+});
+
 test("keeps browser auth same-origin and packages the Hong Kong gateway", async () => {
   const authShell = await readFile(new URL("../app/auth-shell.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(authShell, /supabase\.co|challenges\.cloudflare\.com|turnstile/i);

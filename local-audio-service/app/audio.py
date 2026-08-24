@@ -5,8 +5,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-MAX_BYTES = 500 * 1024 * 1024
-MAX_DURATION_MS = 30 * 60 * 1000
+MAX_BYTES = 1 * 1024 * 1024 * 1024
+MAX_DURATION_MS = 2 * 60 * 60 * 1000
 SUPPORTED_SUFFIXES = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".mp4", ".webm"}
 
 

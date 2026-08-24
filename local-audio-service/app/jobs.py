@@ -4,10 +4,12 @@ import secrets
 import shutil
 import threading
 import time
+import math
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 from .engine import DiarizationEngine, ModelSetupError
+from .engine import CHUNK_DURATION_MS
 from .models import DiarizationTurn, Job, JobSnapshot
 
 
@@ -56,6 +58,8 @@ class JobManager:
                 raise ValueError("JOB_NOT_QUEUEABLE")
             job.status = "decoding"
             job.progress = 20
+            job.chunk_count = max(1, math.ceil((job.duration_ms or CHUNK_DURATION_MS) / CHUNK_DURATION_MS))
+            job.chunk_index = 0
             source_path = Path(job.source_path)
 
         def on_progress(progress: int) -> None:
@@ -63,6 +67,11 @@ class JobManager:
                 current = self._jobs.get(job_id)
                 if current and current.status == "diarizing":
                     current.progress = max(current.progress, min(90, max(30, progress)))
+                    if current.chunk_count:
+                        current.chunk_index = min(
+                            current.chunk_count,
+                            max(0, math.ceil(max(0, current.progress - 35) * current.chunk_count / 55)),
+                        )
 
         try:
             with self._lock:
@@ -132,6 +141,8 @@ class JobManager:
                 duration_ms=job.duration_ms,
                 segments=list(job.segments),
                 error_code=job.error_code,
+                chunk_index=job.chunk_index,
+                chunk_count=job.chunk_count,
             )
 
     def cleanup_expired(self) -> None:

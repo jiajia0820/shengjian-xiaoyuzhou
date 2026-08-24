@@ -4,7 +4,13 @@ import {
   createLocalSpeakerJob,
   getLocalSpeakerHealth,
   getLocalSpeakerJob,
+  localSpeakerErrorMessage,
 } from "../lib/local-speaker-client.ts";
+
+test("长音频限制提示为 2 小时和 1GB", () => {
+  assert.match(localSpeakerErrorMessage("AUDIO_TOO_LONG"), /2 小时/);
+  assert.match(localSpeakerErrorMessage("AUDIO_TOO_LARGE"), /1GB/);
+});
 
 test("本地服务请求带专用请求头且不携带站点认证 cookie", async () => {
   const previousFetch = globalThis.fetch;
@@ -17,7 +23,7 @@ test("本地服务请求带专用请求头且不携带站点认证 cookie", asyn
 
     await getLocalSpeakerHealth();
 
-    assert.equal(request?.url, "http://127.0.0.1:8765/health");
+    assert.equal(request?.url, "http://localhost:8765/health");
     assert.equal(request?.headers.get("x-speaker-client-version"), "1");
     assert.equal(request?.credentials, "omit");
     assert.equal(request?.headers.has("cookie"), false);
@@ -38,7 +44,7 @@ test("创建本地任务只发送音频和说话人数", async () => {
 
     await createLocalSpeakerJob(file, 2);
 
-    assert.equal(request?.url, "http://127.0.0.1:8765/jobs");
+    assert.equal(request?.url, "http://localhost:8765/jobs");
     assert.equal(request?.method, "POST");
     assert.equal(request?.credentials, "omit");
     const form = await request?.formData();
@@ -54,7 +60,7 @@ test("本地服务只返回受限结构并将模型配置错误翻译为中文",
   const previousFetch = globalThis.fetch;
   try {
     globalThis.fetch = async () => Response.json({ detail: "HF_TOKEN_MISSING" }, { status: 422 });
-    await assert.rejects(getLocalSpeakerJob("job"), /运行 hf auth login/);
+    await assert.rejects(getLocalSpeakerJob("job"), /Scripts\\hf\.exe auth login/);
   } finally {
     globalThis.fetch = previousFetch;
   }

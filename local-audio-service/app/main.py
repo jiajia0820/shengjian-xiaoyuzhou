@@ -47,6 +47,8 @@ def _job_payload(snapshot: JobSnapshot) -> dict:
         "expectedSpeakers": snapshot.expected_speakers,
         "durationMs": snapshot.duration_ms,
         "error": snapshot.error_code,
+        "chunkIndex": snapshot.chunk_index,
+        "chunkCount": snapshot.chunk_count,
         "segments": [
             {"startMs": turn.start_ms, "endMs": turn.end_ms, "speakerId": turn.speaker_id}
             for turn in snapshot.segments
@@ -143,6 +145,7 @@ def create_app(settings: ServiceSettings | None = None, manager: JobManager | No
             "service": "ok",
             "ffmpegAvailable": shutil.which("ffprobe") is not None,
             "model": model_status,
+            "device": getattr(active_manager._engine, "device_status", lambda: "cpu")(),
         }
 
     @app.post("/jobs", status_code=202, dependencies=[Depends(require_local_client)])

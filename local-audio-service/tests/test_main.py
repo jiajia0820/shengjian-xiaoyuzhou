@@ -63,7 +63,8 @@ class LocalServiceTests(unittest.TestCase):
         response = self.client.get("/health", headers=self.headers())
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(set(response.json()), {"service", "ffmpegAvailable", "model"})
+        self.assertEqual(set(response.json()), {"service", "ffmpegAvailable", "model", "device"})
+        self.assertEqual(response.json()["device"], "cpu")
         serialized = response.text.lower()
         self.assertNotIn("token", serialized)
         self.assertNotIn("path", serialized)

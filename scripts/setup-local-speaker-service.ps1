@@ -8,12 +8,12 @@ $venvPython = Join-Path $venvRoot "Scripts/python.exe"
 
 & py -3.12 --version | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    throw "需要安装 Python 3.12，并确保 py -3.12 可用。"
+    throw "Python 3.12 is required and py -3.12 must be available."
 }
 
 foreach ($command in @("ffmpeg", "ffprobe")) {
     if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
-        throw "需要先安装 FFmpeg，并确保 $command 位于 PATH 中。"
+        throw "FFmpeg command '$command' must be installed and available on PATH."
     }
 }
 
@@ -22,7 +22,26 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
 }
 
 & $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+$torchIndexUrl = $env:SPEAKER_TORCH_INDEX_URL
+if (-not $torchIndexUrl) {
+    $torchIndexUrl = if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+        "https://download.pytorch.org/whl/cu128"
+    } else {
+        "https://download.pytorch.org/whl/cpu"
+    }
+}
+$wantsCuda = $torchIndexUrl -match "/cu[0-9]+"
+$installedTorchCuda = ""
+if (Test-Path -LiteralPath $venvPython) {
+    $detectedTorchCuda = & $venvPython -c "import torch; print(torch.version.cuda or '')" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $detectedTorchCuda) {
+        $installedTorchCuda = ($detectedTorchCuda | Select-Object -Last 1).Trim()
+    }
+}
+if ($wantsCuda -and -not $installedTorchCuda) {
+    & $venvPython -m pip uninstall -y torch torchaudio
+}
+& $venvPython -m pip install --upgrade torch torchaudio --index-url $torchIndexUrl
 & $venvPython -m pip install -r (Join-Path $serviceRoot "requirements.txt")
 
-Write-Host "本地说话人识别服务已安装。下一步先运行：hf auth login，然后启动 scripts/start-local-speaker-service.ps1。"
+Write-Host "Local speaker service installed with torch index $torchIndexUrl. Run '.\\local-audio-service\\.venv\\Scripts\\hf.exe auth login' and then scripts/start-local-speaker-service.ps1."

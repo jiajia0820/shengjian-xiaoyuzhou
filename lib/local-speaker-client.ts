@@ -2,6 +2,7 @@ export type LocalSpeakerHealth = {
   service: "ok";
   ffmpegAvailable: boolean;
   model: "unloaded" | "ready" | "needs_setup";
+  device?: "cpu" | "cuda";
 };
 
 export type LocalSpeakerTurn = {
@@ -17,21 +18,26 @@ export type LocalSpeakerJob = {
   expectedSpeakers: number | null;
   durationMs: number | null;
   error: string | null;
+  chunkIndex: number;
+  chunkCount: number;
   segments: LocalSpeakerTurn[];
 };
 
 const configuredUrl = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_LOCAL_SPEAKER_URL?.trim() : "";
-const LOCAL_SPEAKER_URL = (configuredUrl || "http://127.0.0.1:8765").replace(/\/+$/, "");
+// Keep the browser on the same loopback hostname as the dev site. Using
+// 127.0.0.1 from a localhost page triggers a private-network preflight in
+// some Chromium environments before the local service can answer it.
+const LOCAL_SPEAKER_URL = (configuredUrl || "http://localhost:8765").replace(/\/+$/, "");
 const CLIENT_HEADERS = { "X-Speaker-Client-Version": "1" };
 const speakerIdPattern = /^speaker_[0-9]{1,3}$/;
 
 export function localSpeakerErrorMessage(code: string | null): string {
   switch (code) {
-    case "HF_TOKEN_MISSING": return "本地模型尚未登录。请在终端运行 hf auth login 后重试";
+    case "HF_TOKEN_MISSING": return "本地模型尚未登录。请在项目根目录运行 .\\local-audio-service\\.venv\\Scripts\\hf.exe auth login 后重试";
     case "PYANNOTE_UNAVAILABLE": return "本地服务缺少 pyannote 依赖，请先运行安装脚本";
     case "PYANNOTE_MODEL_UNAVAILABLE": return "本地模型不可用；请确认已接受 Community-1 模型条件并检查网络";
-    case "AUDIO_TOO_LARGE": return "音频超过 500MB，未开始处理";
-    case "AUDIO_TOO_LONG": return "音频超过 30 分钟，未开始处理";
+    case "AUDIO_TOO_LARGE": return "音频超过 1GB，未开始处理";
+    case "AUDIO_TOO_LONG": return "音频超过 2 小时，未开始处理";
     case "AUDIO_TYPE_UNSUPPORTED": return "该音频格式暂不支持";
     case "JOB_NOT_FOUND": return "本地任务已过期或已被清理";
     case "DIARIZATION_FAILED": return "本地说话人识别失败，请检查音频和模型配置";
@@ -68,7 +74,8 @@ async function localRequest(path: string, init: RequestInit = {}): Promise<unkno
 function parseHealth(value: unknown): LocalSpeakerHealth {
   const record = asObject(value);
   if (!record || record.service !== "ok" || typeof record.ffmpegAvailable !== "boolean"
-    || !["unloaded", "ready", "needs_setup"].includes(String(record.model))) {
+    || !["unloaded", "ready", "needs_setup"].includes(String(record.model))
+    || (record.device !== undefined && !["cpu", "cuda"].includes(String(record.device)))) {
     throw new Error("本地说话人服务返回了无法识别的状态");
   }
   return record as LocalSpeakerHealth;
@@ -89,7 +96,10 @@ function parseJob(value: unknown): LocalSpeakerJob {
     || !Number.isInteger(record.progress) || record.progress < 0 || record.progress > 100
     || !(record.expectedSpeakers === null || (Number.isInteger(record.expectedSpeakers) && record.expectedSpeakers >= 1 && record.expectedSpeakers <= 8))
     || !(record.durationMs === null || (Number.isInteger(record.durationMs) && record.durationMs > 0))
-    || !(record.error === null || typeof record.error === "string") || !Array.isArray(record.segments)) {
+    || !(record.error === null || typeof record.error === "string")
+    || !Number.isInteger(record.chunkIndex) || record.chunkIndex < 0
+    || !Number.isInteger(record.chunkCount) || record.chunkCount < 0
+    || record.chunkIndex > record.chunkCount || !Array.isArray(record.segments)) {
     throw new Error("本地说话人服务返回了无法识别的任务数据");
   }
   const segments = record.segments.map(parseTurn);

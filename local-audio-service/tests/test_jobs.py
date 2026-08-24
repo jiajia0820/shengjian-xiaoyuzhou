@@ -35,7 +35,29 @@ class MissingModelEngine:
         raise ModelSetupError("HF_TOKEN_MISSING")
 
 
+class ChunkProgressEngine:
+    def diarize(self, path: Path, expected_speakers: int | None, on_progress):
+        for progress in (35, 53, 71, 90):
+            on_progress(progress)
+        return [DiarizationTurn(start_ms=0, end_ms=2_000, speaker_id="speaker_0")]
+
+
 class JobManagerTests(unittest.TestCase):
+    def test_publishes_chunk_count_after_long_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jobs = JobManager(root=root, engine=ChunkProgressEngine())
+            job = jobs.create_job(expected_speakers=None)
+            source = jobs.upload_path(job.id, ".wav")
+            source.write_bytes(b"audio")
+            jobs.queue(job.id, source, duration_ms=25 * 60 * 1000)
+
+            jobs.run(job.id)
+
+            snapshot = jobs.snapshot(job.id)
+            self.assertEqual(snapshot.chunk_count, 3)
+            self.assertEqual(snapshot.chunk_index, 3)
+
     def test_job_finishes_and_cleanup_removes_its_temp_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

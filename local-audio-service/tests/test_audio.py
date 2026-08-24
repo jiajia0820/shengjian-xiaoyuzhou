@@ -8,10 +8,14 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.audio import AudioValidationError, MAX_DURATION_MS, probe_duration_ms, validate_audio_file
+from app.audio import AudioValidationError, MAX_BYTES, MAX_DURATION_MS, probe_duration_ms, validate_audio_file
 
 
 class AudioValidationTests(unittest.TestCase):
+    def test_long_audio_limits_are_two_hours_and_one_gigabyte(self):
+        self.assertEqual(MAX_DURATION_MS, 2 * 60 * 60 * 1000)
+        self.assertEqual(MAX_BYTES, 1 * 1024 * 1024 * 1024)
+
     @patch("app.audio.subprocess.run")
     def test_probe_uses_ffprobe_duration_only(self, run):
         run.return_value.stdout = "12.345\n"
@@ -45,6 +49,13 @@ class AudioValidationTests(unittest.TestCase):
             with patch("app.audio.probe_duration_ms", return_value=MAX_DURATION_MS + 1):
                 with self.assertRaisesRegex(AudioValidationError, "AUDIO_TOO_LONG"):
                     validate_audio_file(path)
+
+    def test_accepts_audio_at_exactly_two_hours(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.m4a"
+            path.write_bytes(b"audio")
+            with patch("app.audio.probe_duration_ms", return_value=MAX_DURATION_MS):
+                self.assertEqual(validate_audio_file(path), MAX_DURATION_MS)
 
 
 if __name__ == "__main__":

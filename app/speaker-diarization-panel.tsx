@@ -24,8 +24,8 @@ type ReviewSegment = {
 };
 type Preview = { segments: ReviewSegment[]; labels: SpeakerLabel[]; markdown: string; reviewCount: number };
 
-const MAX_BYTES = 500 * 1024 * 1024;
-const MAX_DURATION_SECONDS = 30 * 60;
+const MAX_BYTES = 1 * 1024 * 1024 * 1024;
+const MAX_DURATION_SECONDS = 2 * 60 * 60;
 const AUDIO_ACCEPT = ".mp3,.m4a,.wav,.flac,.ogg,.mp4,.webm";
 
 function formatTime(milliseconds: number): string {
@@ -88,6 +88,8 @@ export function SpeakerDiarizationPanel({
   const [expectedSpeakers, setExpectedSpeakers] = useState<number | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
+  const [chunkIndex, setChunkIndex] = useState(0);
+  const [chunkCount, setChunkCount] = useState(0);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [turns, setTurns] = useState<LocalSpeakerTurn[]>([]);
   const [labels, setLabels] = useState<SpeakerLabel[]>([]);
@@ -113,6 +115,8 @@ export function SpeakerDiarizationPanel({
     setLabels([]);
     setOverrides({});
     setProgress(0);
+    setChunkIndex(0);
+    setChunkCount(0);
     setError(null);
     updatePhase("idle");
   }
@@ -148,17 +152,17 @@ export function SpeakerDiarizationPanel({
     cancelledRef.current = false;
     try {
       updatePhase("validating");
-      if (file.size > MAX_BYTES) throw new Error("音频超过 500MB，未开始处理");
+      if (file.size > MAX_BYTES) throw new Error("音频超过 1GB，未开始处理");
       try {
         const duration = await audioDurationSeconds(file);
-        if (duration > MAX_DURATION_SECONDS) throw new Error("音频超过 30 分钟，未开始处理");
+        if (duration > MAX_DURATION_SECONDS) throw new Error("音频超过 2 小时，未开始处理");
       } catch (metadataError) {
         if (metadataError instanceof Error && metadataError.message.includes("超过")) throw metadataError;
       }
 
       const health = await getLocalSpeakerHealth();
       if (!health.ffmpegAvailable) throw new Error("本地服务找不到 FFmpeg，请安装后重新启动服务");
-      if (health.model === "needs_setup") throw new Error("本地模型尚未登录。请先运行 hf auth login");
+      if (health.model === "needs_setup") throw new Error("本地模型尚未登录。请在项目根目录运行 .\\local-audio-service\\.venv\\Scripts\\hf.exe auth login");
 
       updatePhase("uploading");
       const job = await createLocalSpeakerJob(file, expectedSpeakers);
@@ -169,6 +173,8 @@ export function SpeakerDiarizationPanel({
         if (cancelledRef.current) return;
         const current = await getLocalSpeakerJob(job.jobId);
         setProgress(current.progress);
+        setChunkIndex(current.chunkIndex);
+        setChunkCount(current.chunkCount);
         if (current.status === "ready") {
           setTurns(current.segments);
           await createPreview(current.segments);
@@ -238,8 +244,8 @@ export function SpeakerDiarizationPanel({
               {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => <option key={count} value={count}>{count} 人</option>)}
             </select>
           </label>
-          <small>上限：30 分钟、500MB。需要先运行 scripts/start-local-speaker-service.ps1。</small>
-          <div className="speaker-progress" aria-live="polite">{phaseLabel(phase)}{phase === "diarizing" && ` ${progress}%`}</div>
+              <small>上限：2 小时、1GB。将按约 10 分钟分块处理。需要先运行 scripts/start-local-speaker-service.ps1。</small>
+          <div className="speaker-progress" aria-live="polite">{phaseLabel(phase)}{phase === "diarizing" && ` ${progress}%`}{phase === "diarizing" && chunkCount > 0 && ` · 第 ${chunkIndex}/${chunkCount} 块`}</div>
           {error && <p className="speaker-error" role="alert">{error}</p>}
           <div className="speaker-modal-actions">
             {busy ? <button type="button" className="danger-button" onClick={() => void close()}>取消本地任务</button>
