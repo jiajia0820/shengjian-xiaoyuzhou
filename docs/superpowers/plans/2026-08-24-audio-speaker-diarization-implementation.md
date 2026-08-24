@@ -35,7 +35,7 @@
 - Modify: `package.json`
 - Create: `tests/transcript-artifact.test.ts`
 
-- [ ] **Step 1: 写入失败测试，规定 v1 兼容、v2 校验与 R2 key。**
+- [x] **Step 1: 写入失败测试，规定 v1 兼容、v2 校验与 R2 key。**
 
   ```ts
   import test from "node:test";
@@ -62,13 +62,13 @@
   });
   ```
 
-- [ ] **Step 2: 运行测试，确认模块尚不存在。**
+- [x] **Step 2: 运行测试，确认模块尚不存在。**
 
   Run: `node --experimental-strip-types --test tests/transcript-artifact.test.ts`
 
   Expected: FAIL，提示找不到 `../lib/transcript-artifact.ts`。
 
-- [ ] **Step 3: 扩展官方片段类型，并实现无信任的 artifact parser。**
+- [x] **Step 3: 扩展官方片段类型，并实现无信任的 artifact parser。**
 
   在 `lib/xiaoyuzhou.ts` 中使用以下兼容类型；`getTranscriptSegments` 同时读取合法 `endMs`，但对官方返回的说话人字段一律按普通外部数据校验：
 
@@ -105,7 +105,7 @@
 
   `buildTranscriptArtifact` 必须复制文本、归一化可选字段并设置 `speakerLayout: null`；`parseTranscriptArtifact` 必须检查片段开始时间单调不减，失败返回 `null` 而不是抛出。
 
-- [ ] **Step 4: 在文档存储层添加 JSON 支持并于导入时原子顺序写入。**
+- [x] **Step 4: 在文档存储层添加 JSON 支持并于导入时原子顺序写入。**
 
   将 `documentKeys` 扩展为：
 
@@ -124,7 +124,7 @@
 
   已存在单集的刷新也覆盖官方 artifact，但绝不覆盖 `current.md`。
 
-- [ ] **Step 5: 将新 Node 测试加入默认测试命令并验证。**
+- [x] **Step 5: 将新 Node 测试加入默认测试命令并验证。**
 
   将 `package.json` 的 `test` 脚本末尾改为：
 
@@ -136,7 +136,7 @@
 
   Expected: PASS；原有 75 个测试及新增 artifact 测试均通过。
 
-- [ ] **Step 6: 提交 artifact 基础。**
+- [x] **Step 6: 提交 artifact 基础。**
 
   ```powershell
   git add lib/xiaoyuzhou.ts lib/transcript-artifact.ts lib/documents.ts app/api/episodes/import/route.ts package.json tests/transcript-artifact.test.ts
@@ -153,7 +153,7 @@
 - Create: `tests/speaker-markdown.test.ts`
 - Modify: `package.json`
 
-- [ ] **Step 1: 为重叠算法写出失败测试。**
+- [x] **Step 1: 为重叠算法写出失败测试。**
 
   ```ts
   test("按累计重叠选择说话人，并把低覆盖率标记为待确认", () => {
@@ -176,13 +176,13 @@
   });
   ```
 
-- [ ] **Step 2: 运行并确认失败。**
+- [x] **Step 2: 运行并确认失败。**
 
   Run: `node --experimental-strip-types --test tests/transcript-speakers.test.ts`
 
   Expected: FAIL，提示找不到 `transcript-speakers.ts`。
 
-- [ ] **Step 3: 实现时间区间和人工修正的纯函数。**
+- [x] **Step 3: 实现时间区间和人工修正的纯函数。**
 
   `normalizeDiarizationTurns` 要求最多 10,000 条、严格递增、不重叠、`endMs > startMs`、ID 满足 `/^speaker_[0-9]{1,3}$/`。`alignTranscriptSpeakers` 使用下列规则，所有浮点覆盖率四舍五入到 3 位：
 
@@ -194,7 +194,7 @@
 
   按同一 `speakerId` 累加 overlap；最高者为结果，覆盖率低于 `0.6`、无重叠或片段涉及多个说话人时 `speakerNeedsReview: true`。`applySpeakerOverrides` 仅允许已出现在 turns 的 ID 或 `null`，并拒绝越界索引。`normalizeSpeakerLabels` 仅允许已知 ID、1–40 个 Unicode 字符、去空白后不重名；没填时按首次出现顺序产生“说话人 1”。
 
-- [ ] **Step 4: 为 Markdown 轮次规则写失败测试。**
+- [x] **Step 4: 为 Markdown 轮次规则写失败测试。**
 
   ```ts
   test("仅在说话人变化时新建标题，保留每轮开头时间戳", () => {
@@ -208,7 +208,7 @@
   });
   ```
 
-- [ ] **Step 5: 实现安全 renderer。**
+- [x] **Step 5: 实现安全 renderer。**
 
   `renderSpeakerMarkdown` 从传入的官方 Markdown 中保留 frontmatter、标题、Show Notes 和 `## 官方文稿` 标题，只替换该标题后的连续文稿区域；frontmatter 移除旧的 `transcript_layout`/`organization_mode`，加入：
 
@@ -219,7 +219,7 @@
 
   以 `speakerId ?? "unconfirmed"` 作为轮次键，变化时输出 `### ${safeLabel}` 和一个空行。相邻原文使用 `joinSegmentText` 合并：中文直接相连；仅当上一段以 ASCII 字母/数字结束、下一段以 ASCII 字母/数字开始时插入一个空格，防止 `hello` 和 `world` 粘连。绝不将模型或浏览器传入的正文用作输出来源。
 
-- [ ] **Step 6: 运行新增纯函数测试和全量测试。**
+- [x] **Step 6: 运行新增纯函数测试和全量测试。**
 
   Run: `node --experimental-strip-types --test tests/transcript-speakers.test.ts tests/speaker-markdown.test.ts`
 
@@ -229,7 +229,7 @@
 
   Expected: PASS。
 
-- [ ] **Step 7: 提交纯业务逻辑。**
+- [x] **Step 7: 提交纯业务逻辑。**
 
   ```powershell
   git add lib/transcript-speakers.ts lib/speaker-markdown.ts tests/transcript-speakers.test.ts tests/speaker-markdown.test.ts package.json
@@ -245,7 +245,7 @@
 - Modify: `tests/core.test.ts`
 - Modify: `tests/rendered-html.test.mjs`
 
-- [ ] **Step 1: 为路由写失败测试，证明浏览器不能提交正文。**
+- [x] **Step 1: 为路由写失败测试，证明浏览器不能提交正文。**
 
   使用已有 `registerHooks` 的 route mock 方式，为新增路由注册如下依赖名：
 
@@ -261,13 +261,13 @@
 
   断言 preview 对 `{ turns }` 返回只读 `segments` 和 `markdown`，并断言保存请求即使额外携带 `markdown: "恶意正文"`，写入的正文仍等于 `renderSpeakerMarkdown` 的结果。
 
-- [ ] **Step 2: 运行目标测试并确认路由尚不存在。**
+- [x] **Step 2: 运行目标测试并确认路由尚不存在。**
 
   Run: `node --experimental-strip-types --test tests/core.test.ts`
 
   Expected: FAIL，提示 speaker route 无法导入或断言失败。
 
-- [ ] **Step 3: 实现共同的请求解析与预览路由。**
+- [x] **Step 3: 实现共同的请求解析与预览路由。**
 
   两个路由均先执行 `requireApiUser({ mutation: true })`，再读取单集和 `keys.transcriptKey`。若 artifact 不存在或 `parseTranscriptArtifact` 返回 `null`，返回 `409 TRANSCRIPT_ARTIFACT_UNAVAILABLE`，提示用户重新获取官方原稿。
 
@@ -285,7 +285,7 @@
 
   超过 1MB 的 `content-length`、非法 JSON、10,000 条以上 turns 或任何正文型字段都返回 `400 INVALID_SPEAKER_PREVIEW`。
 
-- [ ] **Step 4: 实现确认保存、当前稿冲突检测与回滚顺序。**
+- [x] **Step 4: 实现确认保存、当前稿冲突检测与回滚顺序。**
 
   保存体只能包含 `turns`、`labels` 和 `overrides`。重新从 artifact 对齐后才应用 `applySpeakerOverrides`；不要复用浏览器的 `segments` 或 `markdown`。读取 `current.md` 并哈希，允许保存的条件为：
 
@@ -297,7 +297,7 @@
 
   成功路径必须依次：渲染服务器拥有的 Markdown → 计算哈希 → 构造 v2 artifact（带 `speakerLayout: { engine, generatedAt, currentMarkdownHash, labels }`）→ `putJson` → `putMarkdown` → `touchCurrentDocument`。任何校验失败发生在第一处写入前；写入 API 不记录文稿和说话人结果。
 
-- [ ] **Step 5: 为路由存在和 UI 接口增加静态回归断言。**
+- [x] **Step 5: 为路由存在和 UI 接口增加静态回归断言。**
 
   在 `tests/rendered-html.test.mjs` 读取两个新 route，检查：
 
@@ -308,7 +308,7 @@
   assert.match(previewRoute, /normalizeDiarizationTurns/);
   ```
 
-- [ ] **Step 6: 运行全量 Node 测试并提交。**
+- [x] **Step 6: 运行全量 Node 测试并提交。**
 
   Run: `npm test`
 
@@ -331,7 +331,7 @@
 - Create: `local-audio-service/tests/test_audio.py`
 - Create: `local-audio-service/tests/test_jobs.py`
 
-- [ ] **Step 1: 写不依赖真实模型的 Python 失败测试。**
+- [x] **Step 1: 写不依赖真实模型的 Python 失败测试。**
 
   ```python
   class FakeEngine:
@@ -357,13 +357,13 @@
 
   并在 `duration > 30 * 60 * 1000` 时抛出 `AudioValidationError("AUDIO_TOO_LONG")`。
 
-- [ ] **Step 2: 运行 Python 测试，确认缺少模块。**
+- [x] **Step 2: 运行 Python 测试，确认缺少模块。**
 
   Run: `py -3.12 -m unittest discover -s local-audio-service/tests -v`
 
   Expected: FAIL，提示 `app` 或测试目标无法导入。
 
-- [ ] **Step 3: 实现值对象、音频校验和单并发 JobManager。**
+- [x] **Step 3: 实现值对象、音频校验和单并发 JobManager。**
 
   在 `models.py` 定义不可变 `DiarizationTurn(start_ms, end_ms, speaker_id)` 与状态为 `queued|decoding|diarizing|ready|failed|cancelled` 的 `JobSnapshot`。在 `audio.py` 固定：
 
@@ -375,7 +375,7 @@
 
   `JobManager` 使用一个 `ThreadPoolExecutor(max_workers=1)`；任务目录只能是 `root / job_id`，其中 ID 由 `secrets.token_urlsafe(18)` 生成，禁止使用上传文件名作为目录。取消通过 `threading.Event` 表示；pyannote 不能安全中断时任务可完成推理但不得发布结果，最终状态为 `cancelled`。每个状态更新均不保存绝对路径或文件名到快照。
 
-- [ ] **Step 4: 定义可替换 pyannote engine，默认 CPU。**
+- [x] **Step 4: 定义可替换 pyannote engine，默认 CPU。**
 
   `engine.py` 提供：
 
@@ -386,7 +386,7 @@
 
   `PyannoteCommunityEngine` 延迟导入 `torch` 与 `pyannote.audio`，通过 `HF_TOKEN` 或 `huggingface_hub.get_token()` 获得 token；没有 token 时抛出不含 token 的 `ModelSetupError("HF_TOKEN_MISSING")`。调用 `Pipeline.from_pretrained("pyannote/speaker-diarization-community-1", token=token)`，只在显式 `SPEAKER_DEVICE=cuda` 且 CUDA 可用时迁移到 GPU，默认 CPU。读取 `output.exclusive_speaker_diarization`，转换秒为毫秒，按起点排序，重新命名为首见顺序的 `speaker_0`、`speaker_1`；不输出模型概率。
 
-- [ ] **Step 5: 运行 Python 单元测试并提交。**
+- [x] **Step 5: 运行 Python 单元测试并提交。**
 
   Run: `py -3.12 -m unittest discover -s local-audio-service/tests -v`
 
@@ -409,7 +409,7 @@
 - Create: `scripts/start-local-speaker-service.ps1`
 - Modify: `.gitignore`
 
-- [ ] **Step 1: 为 HTTP 边界写失败测试。**
+- [x] **Step 1: 为 HTTP 边界写失败测试。**
 
   用 `fastapi.testclient.TestClient` 和 FakeEngine 断言：
 
@@ -424,7 +424,7 @@
 
   还要断言 `/health` 不含 `token`、`path`、`filename`；超过 500MB 的流式上传在写完整文件前返回 413；`DELETE /jobs/{id}` 只影响对应 ID。
 
-- [ ] **Step 2: 实现 FastAPI 路由与 CORS/PNA 规则。**
+- [x] **Step 2: 实现 FastAPI 路由与 CORS/PNA 规则。**
 
   `create_app(settings, manager)` 默认只允许以下 Origin：
 
@@ -436,7 +436,7 @@
 
   `POST /jobs` 必须校验实际连接来自 `127.0.0.1` 或 `::1`、Origin 在白名单、请求头 `X-Speaker-Client-Version: 1`。把 `UploadFile` 分块写入任务目录，超过 `MAX_BYTES` 立即停止和删除；`ffprobe` 成功后才入队。`GET /jobs/{id}` 与 `DELETE /jobs/{id}` 采用相同 Origin/header 依赖。`/health` 仅返回 `{ service: "ok", ffmpegAvailable, model: "unloaded"|"ready"|"needs_setup" }`。
 
-- [ ] **Step 3: 提供可复现的 Windows 安装与启动脚本。**
+- [x] **Step 3: 提供可复现的 Windows 安装与启动脚本。**
 
   `setup-local-speaker-service.ps1` 使用 `Set-StrictMode -Version Latest`，检查 `py -3.12` 和 `ffmpeg`，在 `local-audio-service/.venv` 创建虚拟环境；随后按以下顺序执行，且绝不读取或输出 Hugging Face token：
 
@@ -454,11 +454,11 @@
 
   `requirements.txt` 固定主依赖范围：`fastapi>=0.115,<1`、`uvicorn[standard]>=0.30,<1`、`python-multipart>=0.0.9,<1`、`pyannote.audio>=4,<5`。
 
-- [ ] **Step 4: 文档化模型授权、离线边界与不记录策略。**
+- [x] **Step 4: 文档化模型授权、离线边界与不记录策略。**
 
   README 必须包含：接受 pyannote Community-1 模型条件和 `hf auth login` 的手动步骤；音频不离开本机、首次模型下载需要联网、模型和节目版权独立；不支持把 token 写进 `.env`、仓库或浏览器；端口仅用于回环地址；30 分钟/500MB 限制与取消/自动清理规则。
 
-- [ ] **Step 5: 忽略虚拟环境和临时目录，运行本地服务测试并提交。**
+- [x] **Step 5: 忽略虚拟环境和临时目录，运行本地服务测试并提交。**
 
   在 `.gitignore` 加入：
 
@@ -487,7 +487,7 @@
 - Modify: `app/workspace.tsx`
 - Modify: `tests/rendered-html.test.mjs`
 
-- [ ] **Step 1: 为本地客户端写失败测试。**
+- [x] **Step 1: 为本地客户端写失败测试。**
 
   ```ts
   test("本地服务请求带专用请求头且不携带站点认证 cookie", async () => {
@@ -505,7 +505,7 @@
 
   再断言 `createLocalSpeakerJob` 使用 `FormData` 中的 `audio` 和 `expectedSpeakers`，不读取 File 的路径、不上传 markdown、不调用 `apiFetch`。
 
-- [ ] **Step 2: 实现 local-speaker-client。**
+- [x] **Step 2: 实现 local-speaker-client。**
 
   固定默认 URL 为 `http://127.0.0.1:8765`，但允许构建时 `NEXT_PUBLIC_LOCAL_SPEAKER_URL` 覆盖。所有请求设置：
 
@@ -517,7 +517,7 @@
 
   导出 `getLocalSpeakerHealth`、`createLocalSpeakerJob`、`getLocalSpeakerJob`、`cancelLocalSpeakerJob`，并把服务的错误类别映射为中文、无敏感细节的 `Error`。不在日志中输出响应原文。
 
-- [ ] **Step 3: 创建面板并先连接 preview/save API。**
+- [x] **Step 3: 创建面板并先连接 preview/save API。**
 
   `SpeakerDiarizationPanel` props：
 
@@ -533,7 +533,7 @@
 
   服务任务 `ready` 后将 `turns` POST 到 `/api/episodes/${eid}/speakers/preview`。预览中渲染所有待确认片段的 select（值为匿名 ID 或空值），以及每个说话人的标签 input；所有片段可通过“查看全部片段”展开后修正。确认保存 PUT 到 `/api/episodes/${eid}/speakers`，仅发送 `turns`、`labels`、`overrides`，成功后调用 `onSaved(markdown)`。
 
-- [ ] **Step 4: 将面板挂到文稿工具栏。**
+- [x] **Step 4: 将面板挂到文稿工具栏。**
 
   在 `workspace.tsx` 的 `document-actions` 中，在“下载 .md”后插入：
 
@@ -547,7 +547,7 @@
 
   传入期间禁用“编辑 Markdown”“恢复原稿”“重新获取原稿”和删除按钮，避免并发覆盖；面板关闭或失败时解除禁用。
 
-- [ ] **Step 5: 添加静态 UI 回归和客户端测试。**
+- [x] **Step 5: 添加静态 UI 回归和客户端测试。**
 
   在 `rendered-html.test.mjs` 断言 Workspace 引用 `SpeakerDiarizationPanel`、按钮包含“从本地音频识别说话人”、组件调用 `/speakers/preview` 与 `/speakers`，并且代码不包含 `apiFetch(LOCAL_SPEAKER` 或 `credentials: "include"`。
 
@@ -555,7 +555,7 @@
 
   Expected: PASS。
 
-- [ ] **Step 6: 提交客户端与面板。**
+- [x] **Step 6: 提交客户端与面板。**
 
   ```powershell
   git add lib/local-speaker-client.ts app/speaker-diarization-panel.tsx app/workspace.tsx tests/local-speaker-client.test.ts tests/rendered-html.test.mjs
@@ -570,7 +570,7 @@
 - Modify: `app/speaker-diarization-panel.tsx`
 - Modify: `tests/rendered-html.test.mjs`
 
-- [ ] **Step 1: 为可访问性和窄屏样式写失败断言。**
+- [x] **Step 1: 为可访问性和窄屏样式写失败断言。**
 
   ```js
   assert.match(styles, /\.speaker-diarization-modal\s*\{[^}]*max-height:/);
@@ -580,17 +580,17 @@
   assert.match(panel, /aria-label="选择本地音频"/);
   ```
 
-- [ ] **Step 2: 实现有限、可取消且不会横向溢出的界面。**
+- [x] **Step 2: 实现有限、可取消且不会横向溢出的界面。**
 
   样式需要：模态框 `width: min(760px, calc(100vw - 28px))`、`max-height: min(780px, calc(100dvh - 28px))`；review 列表纵向滚动；标签和片段文字使用 `overflow-wrap:anywhere`；待确认徽标用文字加颜色，不只依赖颜色。进度显示明确阶段和百分比；处理中提供“取消本地任务”；确认保存前显示“音频不会上传，保存后将覆盖当前编辑稿”。
 
-- [ ] **Step 3: 构建并运行全量 Node 测试。**
+- [x] **Step 3: 构建并运行全量 Node 测试。**
 
   Run: `npm test`
 
   Expected: PASS，构建输出中出现 `/api/episodes/:eid/speakers` 和 `/api/episodes/:eid/speakers/preview`。
 
-- [ ] **Step 4: 提交样式。**
+- [x] **Step 4: 提交样式。**
 
   ```powershell
   git add app/globals.css app/speaker-diarization-panel.tsx tests/rendered-html.test.mjs
@@ -605,11 +605,11 @@
 - Modify: `docs/superpowers/specs/2026-08-24-audio-speaker-diarization-design.md`
 - Modify: `docs/superpowers/plans/2026-08-24-audio-speaker-diarization-implementation.md`
 
-- [ ] **Step 1: 更新主 README 的可选本地服务说明。**
+- [x] **Step 1: 更新主 README 的可选本地服务说明。**
 
   在功能说明中增加“本地音频说话人分段（实验性）”；链接到 `local-audio-service/README.md`。明确说明需要用户有权处理音频、首次下载模型需要 Hugging Face token、音频不经本应用服务器、30 分钟/500MB 限制、输出是匿名说话人而非真实身份。
 
-- [ ] **Step 2: 运行全部自动化检查。**
+- [x] **Step 2: 运行全部自动化检查。**
 
   Run: `npm test`
 
@@ -623,7 +623,7 @@
 
   Expected: PASS，且不下载 pyannote 模型。
 
-- [ ] **Step 3: 执行无真实模型的本地服务健康检查。**
+- [x] **Step 3: 执行无真实模型的本地服务健康检查。**
 
   使用 `scripts/start-local-speaker-service.ps1` 启动服务（不创建任务、不下载模型）；随后执行：
 
@@ -637,7 +637,7 @@
 
   先用 1–3 分钟两人中文对话验证：服务可连接、说话人标签出现、预览中可改名/改片段、保存后只有说话人轮次分段。随后测试 10 分钟；最后选择超过 30 分钟或超过 500MB 的文件，确认前端和服务端均拒绝。确认 `original.md` 未变、音频任务目录被删除、手动编辑过当前稿后保存返回 `409`。
 
-- [ ] **Step 5: 更新状态、检查差异并提交。**
+- [x] **Step 5: 更新状态、检查差异并提交。**
 
   将设计文档状态更新为“已实现，待真实音频验收”，在本计划每项完成后勾选复选框。运行：
 
