@@ -9,7 +9,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --experimental-strip-types --test tests/core.test.ts tests/rendered-html.test.mjs",
+    "test": "npm run build && node --experimental-strip-types --test tests/core.test.ts tests/rendered-html.test.mjs tests/transcript-artifact.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

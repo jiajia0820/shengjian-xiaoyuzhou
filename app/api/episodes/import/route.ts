@@ -1,8 +1,9 @@
 import { consumeUsage, getEpisodeRecord, listEpisodes, publicEpisode, upsertEpisode } from "@/lib/db";
 import { withFreshTokens } from "@/lib/connection";
-import { documentKeys, putMarkdown, readMarkdown } from "@/lib/documents";
+import { documentKeys, putJson, putMarkdown, readMarkdown } from "@/lib/documents";
 import { buildMarkdown } from "@/lib/markdown";
 import { sha256Hex } from "@/lib/security";
+import { buildTranscriptArtifact } from "@/lib/transcript-artifact";
 import { apiError, requireApiUser } from "@/lib/user";
 import { getOfficialEpisode, getTranscriptSegments, parseEpisodeUrl, XiaoyuzhouError } from "@/lib/xiaoyuzhou";
 
@@ -42,6 +43,7 @@ export async function POST(request: Request) {
     const originalHash = await sha256Hex(markdown);
 
     await putMarkdown(keys.originalKey, markdown);
+    await putJson(keys.transcriptKey, buildTranscriptArtifact(parsed.eid, extracted.segments, now));
     if (!existing) await putMarkdown(keys.currentKey, markdown);
 
     await upsertEpisode({

@@ -5,7 +5,11 @@ import { HttpError } from "./user";
 export async function documentKeys(userId: string, eid: string) {
   const owner = (await sha256Hex(userId)).slice(0, 24);
   const base = `users/${owner}/episodes/${eid}`;
-  return { originalKey: `${base}/original.md`, currentKey: `${base}/current.md` };
+  return {
+    originalKey: `${base}/original.md`,
+    currentKey: `${base}/current.md`,
+    transcriptKey: `${base}/transcript.json`,
+  };
 }
 
 export async function analysisDocumentKey(userId: string, eid: string, slot: string): Promise<string> {
@@ -20,9 +24,21 @@ export async function putMarkdown(key: string, markdown: string): Promise<void> 
   });
 }
 
+export async function putJson(key: string, value: unknown): Promise<void> {
+  await getRuntimeEnv().DOCUMENTS.put(key, JSON.stringify(value), {
+    httpMetadata: { contentType: "application/json; charset=utf-8" },
+  });
+}
+
 export async function readMarkdown(key: string): Promise<string> {
   const object = await getRuntimeEnv().DOCUMENTS.get(key);
   if (!object) throw new HttpError(404, "DOCUMENT_NOT_FOUND", "文稿文件不存在");
+  return object.text();
+}
+
+export async function readJson(key: string): Promise<string> {
+  const object = await getRuntimeEnv().DOCUMENTS.get(key);
+  if (!object) throw new HttpError(404, "DOCUMENT_NOT_FOUND", "文稿结构文件不存在");
   return object.text();
 }
 

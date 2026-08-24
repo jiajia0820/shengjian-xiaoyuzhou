@@ -38,6 +38,11 @@ test("packages Sites persistence metadata and migration", async () => {
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });
 
+test("stores a transcript.json sidecar beside each episode document", async () => {
+  const documents = await readFile(new URL("../lib/documents.ts", import.meta.url), "utf8");
+  assert.match(documents, /transcriptKey: `\$\{base\}\/transcript\.json`/);
+});
+
 test("keeps browser auth same-origin and packages the Hong Kong gateway", async () => {
   const authShell = await readFile(new URL("../app/auth-shell.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(authShell, /supabase\.co|challenges\.cloudflare\.com|turnstile/i);

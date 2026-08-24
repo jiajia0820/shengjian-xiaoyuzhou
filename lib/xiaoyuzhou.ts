@@ -23,7 +23,14 @@ export type OfficialEpisode = {
   mediaId: string | null;
 };
 
-export type TranscriptSegment = { startMs: number; text: string };
+export type TranscriptSegment = {
+  startMs: number;
+  endMs?: number | null;
+  text: string;
+  speakerId?: string | null;
+  speakerConfidence?: number | null;
+  speakerNeedsReview?: boolean;
+};
 
 export class XiaoyuzhouError extends Error {
   code: string;
@@ -257,7 +264,10 @@ export async function getTranscriptSegments(eid: string, mediaId: string, tokens
     const text = typeof segment.text === "string" ? segment.text.trim() : "";
     if (!text) return [];
     const startMs = Number(segment.startMs);
-    return [{ startMs: Number.isFinite(startMs) && startMs >= 0 ? Math.floor(startMs) : 0, text }];
+    const normalizedStartMs = Number.isFinite(startMs) && startMs >= 0 ? Math.floor(startMs) : 0;
+    const rawEndMs = Number(segment.endMs);
+    const endMs = Number.isFinite(rawEndMs) && rawEndMs >= normalizedStartMs ? Math.floor(rawEndMs) : null;
+    return [{ startMs: normalizedStartMs, endMs, text }];
   });
 }
 
