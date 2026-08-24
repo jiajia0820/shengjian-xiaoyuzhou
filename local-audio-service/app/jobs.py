@@ -7,7 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
-from .engine import DiarizationEngine
+from .engine import DiarizationEngine, ModelSetupError
 from .models import DiarizationTurn, Job, JobSnapshot
 
 
@@ -83,6 +83,13 @@ class JobManager:
                 current.status = "ready"
                 current.progress = 100
                 current.finished_at = time.monotonic()
+        except ModelSetupError as error:
+            with self._lock:
+                current = self._jobs.get(job_id)
+                if current and current.status != "cancelled":
+                    current.status = "failed"
+                    current.error_code = error.code
+                    current.finished_at = time.monotonic()
         except Exception:
             with self._lock:
                 current = self._jobs.get(job_id)

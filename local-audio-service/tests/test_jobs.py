@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.jobs import JobManager
+from app.engine import ModelSetupError
 from app.models import DiarizationTurn
 
 
@@ -27,6 +28,11 @@ class BlockingEngine:
         self.started.set()
         self.release.wait(timeout=5)
         return [DiarizationTurn(start_ms=0, end_ms=2_000, speaker_id="speaker_0")]
+
+
+class MissingModelEngine:
+    def diarize(self, path: Path, expected_speakers: int | None, on_progress):
+        raise ModelSetupError("HF_TOKEN_MISSING")
 
 
 class JobManagerTests(unittest.TestCase):
@@ -70,6 +76,21 @@ class JobManagerTests(unittest.TestCase):
             self.assertEqual(snapshot.segments, [])
             jobs.cleanup_expired()
             self.assertFalse((root / job.id).exists())
+
+    def test_exposes_safe_model_setup_error_without_source_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jobs = JobManager(root=root, engine=MissingModelEngine())
+            job = jobs.create_job(expected_speakers=None)
+            source = jobs.upload_path(job.id, ".wav")
+            source.write_bytes(b"audio")
+            jobs.queue(job.id, source, duration_ms=2_000)
+
+            jobs.run(job.id)
+
+            snapshot = jobs.snapshot(job.id)
+            self.assertEqual(snapshot.status, "failed")
+            self.assertEqual(snapshot.error_code, "HF_TOKEN_MISSING")
 
 
 if __name__ == "__main__":
