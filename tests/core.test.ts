@@ -107,16 +107,19 @@ function routeMockModule(specifier: string): string | undefined {
   const exports: Record<string, string> = {
     "@/lib/analysis": "buildAnalysisMarkdown,generateAnalysisBody",
     "@/lib/ai-settings": "readActiveAiConfiguration",
-    "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,getFramework,publicAnalysis,refundUsage,releaseAnalysisLease,setOriginalHash,upsertAnalysisResult",
-    "@/lib/documents": "analysisDocumentKey,putMarkdown,readMarkdown",
+    "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,getFramework,publicAnalysis,refundUsage,releaseAnalysisLease,setOriginalHash,touchCurrentDocument,upsertAnalysisResult",
+    "@/lib/documents": "analysisDocumentKey,documentKeys,putJson,putMarkdown,readJson,readMarkdown",
     "@/lib/frameworks": "frameworkForAnalysis,SYSTEM_FRAMEWORK_ID",
     "@/lib/security": "sha256Hex",
     "@/lib/user": "apiError,HttpError,requireApiUser",
+    "@/lib/transcript-artifact": "parseTranscriptArtifact",
+    "@/lib/transcript-speakers": "alignTranscriptSpeakers,applySpeakerOverrides,normalizeDiarizationTurns,normalizeSpeakerLabels,SpeakerInputError",
+    "@/lib/speaker-markdown": "renderSpeakerMarkdown",
   };
   const names = exports[specifier];
   if (!names) return undefined;
   const source = names.split(",").map((name) => (
-    name === "HttpError" || name === "SYSTEM_FRAMEWORK_ID"
+    name === "HttpError" || name === "SYSTEM_FRAMEWORK_ID" || name === "SpeakerInputError"
       ? `export const ${name} = globalThis.__analysisGenerateRouteTestDeps[${JSON.stringify(specifier)}][${JSON.stringify(name)}];`
       : `export const ${name} = (...args) => globalThis.__analysisGenerateRouteTestDeps[${JSON.stringify(specifier)}][${JSON.stringify(name)}](...args);`
   )).join("\n");
@@ -1632,6 +1635,118 @@ test("keeps local Worker development compatible with the configured HTTPS proxy"
   assert.match(upstreamProxy, /content-encoding/);
   assert.match(upstreamProxy, /xyzcdn\.net/);
   assert.match(upstreamProxy, /cloudflare-dns\.com/);
+});
+
+test("保存说话人分段时只使用服务器保存的官方正文", async () => {
+  const [artifactModule, speakersModule, markdownModule] = await Promise.all([
+    import("../lib/transcript-artifact.ts"),
+    import("../lib/transcript-speakers.ts"),
+    import("../lib/speaker-markdown.ts"),
+  ]);
+  const originalMarkdown = `---\nsource: "xiaoyuzhou"\n---\n\n# 标题\n\n## 官方文稿\n\n[00:00:00] 官方原文\n`;
+  const artifact = artifactModule.buildTranscriptArtifact("episode-id", [{ startMs: 0, endMs: 1_000, text: "官方原文" }], "2026-08-24T00:00:00.000Z");
+  let storedMarkdown = "";
+  let storedArtifact = "";
+  let touchedHash = "";
+  globalThis.__analysisGenerateRouteTestDeps = {
+    "@/lib/db": {
+      getEpisodeRecord: async () => ({
+        eid: "episode-id", original_key: "original.md", current_key: "current.md",
+        original_hash: "original-hash", duration_seconds: 1,
+      }),
+      touchCurrentDocument: async (_userId: string, _eid: string, hash: string) => { touchedHash = hash; },
+    },
+    "@/lib/documents": {
+      documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json" }),
+      readJson: async () => JSON.stringify(artifact),
+      readMarkdown: async (key: string) => key === "original.md" ? originalMarkdown : originalMarkdown,
+      putJson: async (_key: string, value: unknown) => { storedArtifact = JSON.stringify(value); },
+      putMarkdown: async (_key: string, markdown: string) => { storedMarkdown = markdown; },
+    },
+    "@/lib/security": { sha256Hex: async (value: string) => value === originalMarkdown ? "original-hash" : "rendered-hash" },
+    "@/lib/transcript-artifact": { parseTranscriptArtifact: artifactModule.parseTranscriptArtifact },
+    "@/lib/transcript-speakers": {
+      normalizeDiarizationTurns: speakersModule.normalizeDiarizationTurns,
+      alignTranscriptSpeakers: speakersModule.alignTranscriptSpeakers,
+      normalizeSpeakerLabels: speakersModule.normalizeSpeakerLabels,
+      applySpeakerOverrides: speakersModule.applySpeakerOverrides,
+      SpeakerInputError: speakersModule.SpeakerInputError,
+    },
+    "@/lib/speaker-markdown": { renderSpeakerMarkdown: markdownModule.renderSpeakerMarkdown },
+    "@/lib/user": {
+      apiError: (error: unknown) => { throw error; },
+      HttpError,
+      requireApiUser: async () => ({ userId: "owner" }),
+    },
+  };
+  try {
+    const route = await import(`${new URL("../app/api/episodes/[eid]/speakers/route.ts", import.meta.url).href}?speaker-save=${crypto.randomUUID()}`);
+    const response = await route.PUT(new Request("https://app.example/api/episodes/episode-id/speakers", {
+      method: "PUT",
+      body: JSON.stringify({
+        turns: [{ startMs: 0, endMs: 1_000, speakerId: "speaker_0" }],
+        labels: [{ id: "speaker_0", label: "主持人" }],
+        overrides: [],
+        markdown: "恶意正文",
+      }),
+    }), { params: Promise.resolve({ eid: "episode-id" }) });
+    const payload = await response.json() as { markdown: string };
+
+    assert.equal(response.status, 200);
+    assert.match(payload.markdown, /### 主持人[\s\S]*官方原文/);
+    assert.doesNotMatch(payload.markdown, /恶意正文/);
+    assert.equal(storedMarkdown, payload.markdown);
+    assert.match(storedArtifact, /speakerLayout/);
+    assert.equal(touchedHash, "rendered-hash");
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+  }
+});
+
+test("说话人预览只计算结果，不写入文稿或旁车文件", async () => {
+  const [artifactModule, speakersModule, markdownModule] = await Promise.all([
+    import("../lib/transcript-artifact.ts"),
+    import("../lib/transcript-speakers.ts"),
+    import("../lib/speaker-markdown.ts"),
+  ]);
+  const originalMarkdown = `---\nsource: "xiaoyuzhou"\n---\n\n# 标题\n\n## 官方文稿\n\n[00:00:00] 官方原文\n`;
+  const artifact = artifactModule.buildTranscriptArtifact("episode-id", [{ startMs: 0, endMs: 1_000, text: "官方原文" }], "2026-08-24T00:00:00.000Z");
+  let writeCount = 0;
+  globalThis.__analysisGenerateRouteTestDeps = {
+    "@/lib/db": { getEpisodeRecord: async () => ({ eid: "episode-id", duration_seconds: 1 }) },
+    "@/lib/documents": {
+      documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json" }),
+      readJson: async () => JSON.stringify(artifact),
+      readMarkdown: async () => originalMarkdown,
+      putJson: async () => { writeCount += 1; },
+      putMarkdown: async () => { writeCount += 1; },
+    },
+    "@/lib/transcript-artifact": { parseTranscriptArtifact: artifactModule.parseTranscriptArtifact },
+    "@/lib/transcript-speakers": {
+      normalizeDiarizationTurns: speakersModule.normalizeDiarizationTurns,
+      alignTranscriptSpeakers: speakersModule.alignTranscriptSpeakers,
+      normalizeSpeakerLabels: speakersModule.normalizeSpeakerLabels,
+      applySpeakerOverrides: speakersModule.applySpeakerOverrides,
+      SpeakerInputError: speakersModule.SpeakerInputError,
+    },
+    "@/lib/speaker-markdown": { renderSpeakerMarkdown: markdownModule.renderSpeakerMarkdown },
+    "@/lib/user": { apiError: (error: unknown) => { throw error; }, HttpError, requireApiUser: async () => ({ userId: "owner" }) },
+  };
+  try {
+    const route = await import(`${new URL("../app/api/episodes/[eid]/speakers/preview/route.ts", import.meta.url).href}?speaker-preview=${crypto.randomUUID()}`);
+    const response = await route.POST(new Request("https://app.example/api/episodes/episode-id/speakers/preview", {
+      method: "POST",
+      body: JSON.stringify({ turns: [{ startMs: 0, endMs: 1_000, speakerId: "speaker_0" }] }),
+    }), { params: Promise.resolve({ eid: "episode-id" }) });
+    const payload = await response.json() as { preview: { markdown: string; reviewCount: number } };
+
+    assert.equal(response.status, 200);
+    assert.match(payload.preview.markdown, /### 说话人 1/);
+    assert.equal(payload.preview.reviewCount, 0);
+    assert.equal(writeCount, 0);
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+  }
 });
 
 test("keeps custom provider credentials out of generated analysis artifacts", async () => {
