@@ -11,8 +11,15 @@ export type StoredTranscriptSegment = {
 
 export type SpeakerLabel = { id: string; label: string };
 
+export const SPEAKER_ENGINES = ["pyannote-community-1", "pyannote-wespeaker-voiceprint-v1"] as const;
+export type SpeakerEngine = typeof SPEAKER_ENGINES[number];
+
+export function isSpeakerEngine(value: unknown): value is SpeakerEngine {
+  return typeof value === "string" && (SPEAKER_ENGINES as readonly string[]).includes(value);
+}
+
 export type SpeakerLayout = {
-  engine: "pyannote-community-1";
+  engine: SpeakerEngine;
   generatedAt: string;
   currentMarkdownHash: string;
   labels: SpeakerLabel[];
@@ -87,11 +94,11 @@ function normalizeLabels(value: unknown): SpeakerLabel[] | null {
 function normalizeSpeakerLayout(value: unknown): SpeakerLayout | null | undefined {
   if (value === undefined || value === null) return value === undefined ? undefined : null;
   const layout = objectValue(value);
-  if (!layout || layout.engine !== "pyannote-community-1" || typeof layout.generatedAt !== "string"
+  if (!layout || !isSpeakerEngine(layout.engine) || typeof layout.generatedAt !== "string"
     || typeof layout.currentMarkdownHash !== "string" || !layout.currentMarkdownHash) return undefined;
   const labels = normalizeLabels(layout.labels);
   return labels === null ? undefined : {
-    engine: "pyannote-community-1",
+    engine: layout.engine,
     generatedAt: layout.generatedAt,
     currentMarkdownHash: layout.currentMarkdownHash,
     labels,

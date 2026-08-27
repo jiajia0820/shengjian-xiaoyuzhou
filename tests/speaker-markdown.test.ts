@@ -48,3 +48,11 @@ test("英文片段之间补空格，未确认片段不伪造身份", () => {
   assert.match(markdown, /\[00:00:00\] hello world/);
   assert.match(markdown, /### 待确认\n\n\[00:00:04\] 不确定/);
 });
+
+test("声纹来源写入受限的 Markdown frontmatter", () => {
+  const markdown = renderSpeakerMarkdown(OFFICIAL_MARKDOWN, [
+    { startMs: 0, endMs: 2_000, text: "你好", speakerId: "speaker_0", speakerConfidence: 1, speakerNeedsReview: false },
+  ], [{ id: "speaker_0", label: "主持人" }], "pyannote-wespeaker-voiceprint-v1");
+
+  assert.match(markdown, /speaker_source: "pyannote-wespeaker-voiceprint-v1"/);
+});

@@ -2,6 +2,7 @@ import { getEpisodeRecord } from "@/lib/db";
 import { documentKeys, readJson, readMarkdown } from "@/lib/documents";
 import { renderSpeakerMarkdown } from "@/lib/speaker-markdown";
 import { parseTranscriptArtifact } from "@/lib/transcript-artifact";
+import { isSpeakerEngine, type SpeakerEngine } from "@/lib/transcript-artifact";
 import {
   alignTranscriptSpeakers,
   normalizeDiarizationTurns,
@@ -35,6 +36,9 @@ export async function POST(request: Request, context: Context) {
     const record = await getEpisodeRecord(user.userId, eid);
     if (!record) throw new HttpError(404, "EPISODE_NOT_FOUND", "没有找到这篇文稿");
     const body = await readBody(request);
+    const engine: SpeakerEngine = body.engine === undefined
+      ? "pyannote-community-1"
+      : isSpeakerEngine(body.engine) ? body.engine : (() => { throw new SpeakerInputError("说话人引擎无效"); })();
     const keys = await documentKeys(user.userId, eid);
     const artifact = parseTranscriptArtifact(await readJson(keys.transcriptKey));
     if (!artifact || artifact.episodeId !== eid) {
@@ -46,8 +50,8 @@ export async function POST(request: Request, context: Context) {
       turns,
       record.duration_seconds === null ? null : record.duration_seconds * 1000,
     );
-    const labels = normalizeSpeakerLabels(undefined, aligned.speakerIds);
-    const markdown = renderSpeakerMarkdown(await readMarkdown(record.original_key), aligned.segments, labels);
+    const labels = normalizeSpeakerLabels(body.labels, aligned.speakerIds);
+    const markdown = renderSpeakerMarkdown(await readMarkdown(record.original_key), aligned.segments, labels, engine);
     return Response.json({
       preview: {
         segments: aligned.segments,

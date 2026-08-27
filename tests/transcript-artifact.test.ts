@@ -60,3 +60,21 @@ test("读取旧 v1 旁车文件时升级并补齐说话人字段", () => {
     speakerNeedsReview: false,
   });
 });
+
+test("读取并保留两人声纹来源", () => {
+  const parsed = parseTranscriptArtifact(JSON.stringify({
+    schemaVersion: 2,
+    source: "xiaoyuzhou",
+    episodeId: "episode",
+    capturedAt: "2026-08-24T00:00:00.000Z",
+    speakerLayout: {
+      engine: "pyannote-wespeaker-voiceprint-v1",
+      generatedAt: "2026-08-24T00:00:01.000Z",
+      currentMarkdownHash: "hash",
+      labels: [{ id: "speaker_0", label: "主持人" }],
+    },
+    segments: [{ startMs: 0, text: "原文" }],
+  }));
+
+  assert.equal(parsed?.speakerLayout?.engine, "pyannote-wespeaker-voiceprint-v1");
+});

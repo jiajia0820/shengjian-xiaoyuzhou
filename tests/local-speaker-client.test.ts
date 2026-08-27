@@ -56,6 +56,42 @@ test("创建本地任务只发送音频和说话人数", async () => {
   }
 });
 
+test("创建两人声纹任务发送模式和参考区间", async () => {
+  const previousFetch = globalThis.fetch;
+  let request: Request | undefined;
+  try {
+    globalThis.fetch = async (input, init) => {
+      request = new Request(input, init);
+      return Response.json({ jobId: "voiceprint-job", status: "queued" }, { status: 202 });
+    };
+    const file = new File(["audio"], "dialogue.wav", { type: "audio/wav" });
+    await createLocalSpeakerJob(file, {
+      mode: "voiceprint",
+      references: {
+        speaker_0: { startMs: 0, endMs: 10_000 },
+        speaker_1: { startMs: 20_000, endMs: 30_000 },
+      },
+    });
+
+    const form = await request?.formData();
+    assert.equal(form?.get("mode"), "voiceprint");
+    assert.deepEqual(JSON.parse(String(form?.get("references"))), {
+      speaker_0: { startMs: 0, endMs: 10_000 },
+      speaker_1: { startMs: 20_000, endMs: 30_000 },
+    });
+    assert.equal(form?.has("expectedSpeakers"), false);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("翻译声纹任务错误码而不暴露服务端原文", () => {
+  assert.match(localSpeakerErrorMessage("VOICEPRINT_REFERENCES_INVALID"), /参考/);
+  assert.match(localSpeakerErrorMessage("VOICEPRINT_MODEL_UNAVAILABLE"), /声纹模型/);
+  assert.match(localSpeakerErrorMessage("VOICEPRINT_LOW_CONFIDENCE"), /置信度/);
+  assert.match(localSpeakerErrorMessage("VOICEPRINT_FAILED"), /声纹/);
+});
+
 test("本地服务只返回受限结构并将模型配置错误翻译为中文", async () => {
   const previousFetch = globalThis.fetch;
   try {

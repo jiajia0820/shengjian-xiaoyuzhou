@@ -112,7 +112,7 @@ function routeMockModule(specifier: string): string | undefined {
     "@/lib/frameworks": "frameworkForAnalysis,SYSTEM_FRAMEWORK_ID",
     "@/lib/security": "sha256Hex",
     "@/lib/user": "apiError,HttpError,requireApiUser",
-    "@/lib/transcript-artifact": "parseTranscriptArtifact",
+    "@/lib/transcript-artifact": "isSpeakerEngine,parseTranscriptArtifact",
     "@/lib/transcript-speakers": "alignTranscriptSpeakers,applySpeakerOverrides,normalizeDiarizationTurns,normalizeSpeakerLabels,SpeakerInputError",
     "@/lib/speaker-markdown": "renderSpeakerMarkdown",
   };
@@ -1664,7 +1664,10 @@ test("保存说话人分段时只使用服务器保存的官方正文", async ()
       putMarkdown: async (_key: string, markdown: string) => { storedMarkdown = markdown; },
     },
     "@/lib/security": { sha256Hex: async (value: string) => value === originalMarkdown ? "original-hash" : "rendered-hash" },
-    "@/lib/transcript-artifact": { parseTranscriptArtifact: artifactModule.parseTranscriptArtifact },
+    "@/lib/transcript-artifact": {
+      isSpeakerEngine: artifactModule.isSpeakerEngine,
+      parseTranscriptArtifact: artifactModule.parseTranscriptArtifact,
+    },
     "@/lib/transcript-speakers": {
       normalizeDiarizationTurns: speakersModule.normalizeDiarizationTurns,
       alignTranscriptSpeakers: speakersModule.alignTranscriptSpeakers,
@@ -1687,6 +1690,7 @@ test("保存说话人分段时只使用服务器保存的官方正文", async ()
         turns: [{ startMs: 0, endMs: 1_000, speakerId: "speaker_0" }],
         labels: [{ id: "speaker_0", label: "主持人" }],
         overrides: [],
+        engine: "pyannote-wespeaker-voiceprint-v1",
         markdown: "恶意正文",
       }),
     }), { params: Promise.resolve({ eid: "episode-id" }) });
@@ -1695,8 +1699,9 @@ test("保存说话人分段时只使用服务器保存的官方正文", async ()
     assert.equal(response.status, 200);
     assert.match(payload.markdown, /### 主持人[\s\S]*官方原文/);
     assert.doesNotMatch(payload.markdown, /恶意正文/);
+    assert.match(payload.markdown, /speaker_source: "pyannote-wespeaker-voiceprint-v1"/);
     assert.equal(storedMarkdown, payload.markdown);
-    assert.match(storedArtifact, /speakerLayout/);
+    assert.match(storedArtifact, /pyannote-wespeaker-voiceprint-v1/);
     assert.equal(touchedHash, "rendered-hash");
   } finally {
     globalThis.__analysisGenerateRouteTestDeps = undefined;
@@ -1721,7 +1726,10 @@ test("说话人预览只计算结果，不写入文稿或旁车文件", async ()
       putJson: async () => { writeCount += 1; },
       putMarkdown: async () => { writeCount += 1; },
     },
-    "@/lib/transcript-artifact": { parseTranscriptArtifact: artifactModule.parseTranscriptArtifact },
+    "@/lib/transcript-artifact": {
+      isSpeakerEngine: artifactModule.isSpeakerEngine,
+      parseTranscriptArtifact: artifactModule.parseTranscriptArtifact,
+    },
     "@/lib/transcript-speakers": {
       normalizeDiarizationTurns: speakersModule.normalizeDiarizationTurns,
       alignTranscriptSpeakers: speakersModule.alignTranscriptSpeakers,
@@ -1736,12 +1744,17 @@ test("说话人预览只计算结果，不写入文稿或旁车文件", async ()
     const route = await import(`${new URL("../app/api/episodes/[eid]/speakers/preview/route.ts", import.meta.url).href}?speaker-preview=${crypto.randomUUID()}`);
     const response = await route.POST(new Request("https://app.example/api/episodes/episode-id/speakers/preview", {
       method: "POST",
-      body: JSON.stringify({ turns: [{ startMs: 0, endMs: 1_000, speakerId: "speaker_0" }] }),
+      body: JSON.stringify({
+        turns: [{ startMs: 0, endMs: 1_000, speakerId: "speaker_0" }],
+        labels: [{ id: "speaker_0", label: "主持人" }],
+        engine: "pyannote-wespeaker-voiceprint-v1",
+      }),
     }), { params: Promise.resolve({ eid: "episode-id" }) });
     const payload = await response.json() as { preview: { markdown: string; reviewCount: number } };
 
     assert.equal(response.status, 200);
-    assert.match(payload.preview.markdown, /### 说话人 1/);
+    assert.match(payload.preview.markdown, /### 主持人/);
+    assert.match(payload.preview.markdown, /speaker_source: "pyannote-wespeaker-voiceprint-v1"/);
     assert.equal(payload.preview.reviewCount, 0);
     assert.equal(writeCount, 0);
   } finally {

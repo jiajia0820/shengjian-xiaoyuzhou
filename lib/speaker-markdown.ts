@@ -1,15 +1,15 @@
 import { formatTimestamp } from "./markdown.ts";
-import type { SpeakerLabel, StoredTranscriptSegment } from "./transcript-artifact.ts";
+import { isSpeakerEngine, type SpeakerEngine, type SpeakerLabel, type StoredTranscriptSegment } from "./transcript-artifact.ts";
 
-function updateFrontmatter(markdown: string): string {
+function updateFrontmatter(markdown: string, engine: SpeakerEngine): string {
   const normalized = markdown.replaceAll("\r\n", "\n");
   const match = normalized.match(/^---\n([\s\S]*?)\n---(?=\n|$)/);
   if (match) {
     const fields = match[1].split("\n").filter((line) => !/^\s*(transcript_layout|organization_mode|speaker_source):/.test(line));
-    fields.push('transcript_layout: "speaker-v1"', 'speaker_source: "pyannote-community-1"');
+    fields.push('transcript_layout: "speaker-v1"', `speaker_source: "${engine}"`);
     return `---\n${fields.join("\n")}\n---${normalized.slice(match[0].length)}`;
   }
-  return `---\ntranscript_layout: "speaker-v1"\nspeaker_source: "pyannote-community-1"\n---\n\n${normalized}`;
+  return `---\ntranscript_layout: "speaker-v1"\nspeaker_source: "${engine}"\n---\n\n${normalized}`;
 }
 
 function safeLabel(value: string | undefined): string {
@@ -30,8 +30,9 @@ export function renderSpeakerMarkdown(
   officialMarkdown: string,
   segments: readonly StoredTranscriptSegment[],
   labels: readonly SpeakerLabel[],
+  engine: SpeakerEngine = "pyannote-community-1",
 ): string {
-  const normalized = updateFrontmatter(officialMarkdown);
+  const normalized = updateFrontmatter(officialMarkdown, isSpeakerEngine(engine) ? engine : "pyannote-community-1");
   const lines = normalized.split("\n");
   const officialIndex = lines.findIndex((line) => line.trim() === "## 官方文稿");
   if (officialIndex < 0) throw new Error("没有找到“## 官方文稿”区域");
