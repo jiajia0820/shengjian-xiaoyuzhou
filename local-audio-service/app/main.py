@@ -7,17 +7,20 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from .audio import AudioValidationError, MAX_BYTES, SUPPORTED_SUFFIXES, validate_audio_file
-from .engine import PyannoteCommunityEngine
+from .engine import PyannoteCommunityEngine, VoiceprintEngine
 from .jobs import JobManager
 from .models import JobSnapshot
+from .voiceprint import VoiceprintInputError, parse_voiceprint_references, validate_voiceprint_reference_bounds
 
 DEFAULT_ALLOWED_ORIGINS = frozenset({"http://localhost:3000", "http://127.0.0.1:3000"})
 LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 CLIENT_VERSION = "1"
+MODEL_STATUS_VALUES = frozenset({"unloaded", "ready", "needs_setup"})
+DEVICE_STATUS_VALUES = frozenset({"cpu", "cuda"})
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,7 @@ def _job_payload(snapshot: JobSnapshot) -> dict:
         "error": snapshot.error_code,
         "chunkIndex": snapshot.chunk_index,
         "chunkCount": snapshot.chunk_count,
+        "mode": snapshot.mode,
         "segments": [
             {"startMs": turn.start_ms, "endMs": turn.end_ms, "speakerId": turn.speaker_id}
             for turn in snapshot.segments
@@ -68,6 +72,13 @@ def _parse_expected_speakers(value: str | None) -> int | None:
     return parsed
 
 
+def _parse_mode(value: str | None) -> str:
+    parsed = (value or "diarization").strip().lower()
+    if parsed not in {"diarization", "voiceprint"}:
+        raise HTTPException(status_code=422, detail="JOB_MODE_INVALID")
+    return parsed
+
+
 def _error_status(error: AudioValidationError) -> int:
     if error.code == "AUDIO_TOO_LARGE":
         return 413
@@ -76,10 +87,22 @@ def _error_status(error: AudioValidationError) -> int:
     return 422
 
 
+def _safe_engine_status(engine: object | None, method_name: str, allowed: frozenset[str], fallback: str) -> str:
+    try:
+        value = getattr(engine, method_name, lambda: fallback)()
+    except Exception:
+        return fallback
+    return value if isinstance(value, str) and value in allowed else fallback
+
+
 def create_app(settings: ServiceSettings | None = None, manager: JobManager | None = None) -> FastAPI:
     active_settings = settings or load_settings()
     owns_manager = manager is None
-    active_manager = manager or JobManager(active_settings.job_root, PyannoteCommunityEngine())
+    active_manager = manager or JobManager(
+        active_settings.job_root,
+        PyannoteCommunityEngine(),
+        voiceprint_engine=VoiceprintEngine(),
+    )
     if owns_manager:
         active_manager.clear_orphaned_directories()
 
@@ -140,26 +163,49 @@ def create_app(settings: ServiceSettings | None = None, manager: JobManager | No
 
     @app.get("/health", dependencies=[Depends(require_local_client)])
     async def health() -> dict:
-        model_status = getattr(active_manager._engine, "model_status", lambda: "unloaded")()
+        voiceprint_engine = getattr(active_manager, "_voiceprint_engine", None)
         return {
             "service": "ok",
             "ffmpegAvailable": shutil.which("ffprobe") is not None,
-            "model": model_status,
-            "device": getattr(active_manager._engine, "device_status", lambda: "cpu")(),
+            "model": _safe_engine_status(active_manager._engine, "model_status", MODEL_STATUS_VALUES, "unloaded"),
+            "device": _safe_engine_status(active_manager._engine, "device_status", DEVICE_STATUS_VALUES, "cpu"),
+            "voiceprintModel": _safe_engine_status(voiceprint_engine, "model_status", MODEL_STATUS_VALUES, "unloaded"),
+            "voiceprintDevice": _safe_engine_status(voiceprint_engine, "device_status", DEVICE_STATUS_VALUES, "cpu"),
         }
 
     @app.post("/jobs", status_code=202, dependencies=[Depends(require_local_client)])
-    async def create_job(request: Request, audio: UploadFile = File(...), expectedSpeakers: str | None = None) -> dict:
+    async def create_job(
+        request: Request,
+        audio: UploadFile = File(...),
+        expectedSpeakers: str | None = Form(None),
+        mode: str | None = Form(None),
+        references: str | None = Form(None),
+    ) -> dict:
         content_length = request.headers.get("content-length")
         if content_length and content_length.isdecimal() and int(content_length) > MAX_BYTES:
             raise HTTPException(status_code=413, detail="AUDIO_TOO_LARGE")
 
         expected_speakers = _parse_expected_speakers(expectedSpeakers)
+        parsed_mode = _parse_mode(mode)
+        parsed_references = None
+        if parsed_mode == "voiceprint":
+            try:
+                parsed_references = parse_voiceprint_references(references)
+            except VoiceprintInputError as error:
+                raise HTTPException(status_code=422, detail=error.code) from error
         suffix = Path(audio.filename or "").suffix.lower()
         if suffix not in SUPPORTED_SUFFIXES:
             raise HTTPException(status_code=415, detail="AUDIO_TYPE_UNSUPPORTED")
 
-        job = active_manager.create_job(expected_speakers)
+        try:
+            job = active_manager.create_job(
+                expected_speakers,
+                mode=parsed_mode,
+                references=parsed_references,
+            )
+        except ValueError as error:
+            code = str(error) if str(error) in {"JOB_MODE_INVALID", "VOICEPRINT_REFERENCES_INVALID"} else "AUDIO_PROCESSING_REJECTED"
+            raise HTTPException(status_code=422, detail=code) from error
         source_path = active_manager.upload_path(job.id, suffix)
         written = 0
         try:
@@ -170,11 +216,19 @@ def create_app(settings: ServiceSettings | None = None, manager: JobManager | No
                         raise AudioValidationError("AUDIO_TOO_LARGE")
                     target.write(chunk)
             duration_ms = validate_audio_file(source_path)
+            if parsed_references is not None:
+                try:
+                    validate_voiceprint_reference_bounds(parsed_references, duration_ms)
+                except VoiceprintInputError as error:
+                    raise HTTPException(status_code=422, detail=error.code) from error
             active_manager.queue(job.id, source_path, duration_ms)
             active_manager.start(job.id)
         except AudioValidationError as error:
             active_manager.discard(job.id)
             raise HTTPException(status_code=_error_status(error), detail=error.code) from error
+        except HTTPException:
+            active_manager.discard(job.id)
+            raise
         except Exception:
             active_manager.discard(job.id)
             raise HTTPException(status_code=422, detail="AUDIO_PROCESSING_REJECTED")

@@ -8,15 +8,22 @@ import math
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
-from .engine import DiarizationEngine, ModelSetupError
+from .engine import DiarizationEngine, ModelSetupError, VoiceprintEngine
 from .engine import CHUNK_DURATION_MS
-from .models import DiarizationTurn, Job, JobSnapshot
+from .models import DiarizationTurn, Job, JobMode, JobSnapshot, VoiceprintReference
 
 
 class JobManager:
-    def __init__(self, root: Path, engine: DiarizationEngine, retention_seconds: int = 15 * 60):
+    def __init__(
+        self,
+        root: Path,
+        engine: DiarizationEngine,
+        retention_seconds: int = 15 * 60,
+        voiceprint_engine: VoiceprintEngine | None = None,
+    ):
         self._root = root
         self._engine = engine
+        self._voiceprint_engine = voiceprint_engine or VoiceprintEngine()
         self._retention_seconds = retention_seconds
         self._jobs: dict[str, Job] = {}
         self._lock = threading.RLock()
@@ -24,13 +31,30 @@ class JobManager:
         self._futures = {}
         self._root.mkdir(parents=True, exist_ok=True)
 
-    def create_job(self, expected_speakers: int | None) -> JobSnapshot:
+    def create_job(
+        self,
+        expected_speakers: int | None,
+        *,
+        mode: JobMode = "diarization",
+        references: tuple[VoiceprintReference, VoiceprintReference] | None = None,
+    ) -> JobSnapshot:
+        if mode not in {"diarization", "voiceprint"}:
+            raise ValueError("JOB_MODE_INVALID")
+        if mode == "voiceprint" and references is None:
+            raise ValueError("VOICEPRINT_REFERENCES_INVALID")
+        if mode == "diarization":
+            references = None
         job_id = secrets.token_urlsafe(18)
         with self._lock:
             while job_id in self._jobs:
                 job_id = secrets.token_urlsafe(18)
             (self._root / job_id).mkdir(mode=0o700)
-            self._jobs[job_id] = Job(id=job_id, expected_speakers=expected_speakers)
+            self._jobs[job_id] = Job(
+                id=job_id,
+                expected_speakers=expected_speakers,
+                mode=mode,
+                references=references,
+            )
             return self.snapshot(job_id)
 
     def upload_path(self, job_id: str, suffix: str) -> Path:
@@ -80,7 +104,12 @@ class JobManager:
                     return
                 self._jobs[job_id].status = "diarizing"
                 self._jobs[job_id].progress = 30
-            segments = self._engine.diarize(source_path, job.expected_speakers, on_progress)
+            if job.mode == "voiceprint":
+                if job.references is None:
+                    raise ModelSetupError("VOICEPRINT_REFERENCES_INVALID")
+                segments = self._voiceprint_engine.identify(source_path, job.references, on_progress)
+            else:
+                segments = self._engine.diarize(source_path, job.expected_speakers, on_progress)
             if any(segment.end_ms <= segment.start_ms for segment in segments):
                 raise ValueError("DIARIZATION_INVALID")
             with self._lock:
@@ -104,7 +133,7 @@ class JobManager:
                 current = self._jobs.get(job_id)
                 if current and current.status != "cancelled":
                     current.status = "failed"
-                    current.error_code = "DIARIZATION_FAILED"
+                    current.error_code = "VOICEPRINT_FAILED" if current.mode == "voiceprint" else "DIARIZATION_FAILED"
                     current.finished_at = time.monotonic()
 
     def start(self, job_id: str) -> None:
@@ -143,6 +172,8 @@ class JobManager:
                 error_code=job.error_code,
                 chunk_index=job.chunk_index,
                 chunk_count=job.chunk_count,
+                mode=job.mode,
+                references=job.references,
             )
 
     def cleanup_expired(self) -> None:

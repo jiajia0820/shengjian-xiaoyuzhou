@@ -33,12 +33,16 @@ class JobSnapshot:
     error_code: str | None
     chunk_index: int = 0
     chunk_count: int = 0
+    mode: JobMode = "diarization"
+    references: tuple[VoiceprintReference, VoiceprintReference] | None = None
 
 
 @dataclass
 class Job:
     id: str
     expected_speakers: int | None
+    mode: JobMode = "diarization"
+    references: tuple[VoiceprintReference, VoiceprintReference] | None = None
     status: JobStatus = "queued"
     progress: int = 0
     duration_ms: int | None = None
