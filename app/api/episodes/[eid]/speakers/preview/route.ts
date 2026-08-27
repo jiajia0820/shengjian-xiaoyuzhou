@@ -1,8 +1,7 @@
 import { getEpisodeRecord } from "@/lib/db";
 import { documentKeys, readJson, readMarkdown } from "@/lib/documents";
 import { renderSpeakerMarkdown } from "@/lib/speaker-markdown";
-import { parseTranscriptArtifact } from "@/lib/transcript-artifact";
-import { isSpeakerEngine, type SpeakerEngine } from "@/lib/transcript-artifact";
+import { isSpeakerEngine, parseTranscriptArtifact, type SpeakerEngine } from "@/lib/transcript-artifact";
 import {
   alignTranscriptSpeakers,
   normalizeDiarizationTurns,

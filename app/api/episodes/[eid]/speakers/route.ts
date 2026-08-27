@@ -2,8 +2,7 @@ import { getEpisodeRecord, touchCurrentDocument } from "@/lib/db";
 import { documentKeys, putJson, putMarkdown, readJson, readMarkdown } from "@/lib/documents";
 import { sha256Hex } from "@/lib/security";
 import { renderSpeakerMarkdown } from "@/lib/speaker-markdown";
-import { parseTranscriptArtifact } from "@/lib/transcript-artifact";
-import { isSpeakerEngine, type SpeakerEngine } from "@/lib/transcript-artifact";
+import { isSpeakerEngine, parseTranscriptArtifact, type SpeakerEngine } from "@/lib/transcript-artifact";
 import {
   alignTranscriptSpeakers,
   applySpeakerOverrides,

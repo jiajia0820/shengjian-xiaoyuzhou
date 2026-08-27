@@ -155,13 +155,15 @@ export function applySpeakerOverrides(
   const seen = new Set<number>();
   for (const entry of value) {
     const item = objectValue(entry);
-    if (!item || !Number.isInteger(item.index) || item.index < 0 || item.index >= result.length
-      || seen.has(item.index) || (item.speakerId !== null && (typeof item.speakerId !== "string" || !known.has(item.speakerId)))) {
+    const index = item?.index;
+    const speakerId = item?.speakerId;
+    if (!item || !Number.isInteger(index) || (index as number) < 0 || (index as number) >= result.length
+      || seen.has(index as number) || (speakerId !== null && (typeof speakerId !== "string" || !known.has(speakerId)))) {
       throw new SpeakerInputError("说话人修正无效");
     }
-    seen.add(item.index);
-    result[item.index].speakerId = item.speakerId as string | null;
-    result[item.index].speakerNeedsReview = item.speakerId === null;
+    seen.add(index as number);
+    result[index as number].speakerId = speakerId as string | null;
+    result[index as number].speakerNeedsReview = speakerId === null;
   }
   return result;
 }

@@ -65,6 +65,10 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+function isInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value);
+}
+
 async function localRequest(path: string, init: RequestInit = {}): Promise<unknown> {
   let response: Response;
   try {
@@ -101,8 +105,10 @@ function parseHealth(value: unknown): LocalSpeakerHealth {
 
 function parseTurn(value: unknown): LocalSpeakerTurn | null {
   const record = asObject(value);
-  if (!record || !Number.isInteger(record.startMs) || !Number.isInteger(record.endMs)
-    || record.startMs < 0 || record.endMs <= record.startMs
+  const startMs = record?.startMs;
+  const endMs = record?.endMs;
+  if (!record || !isInteger(startMs) || !isInteger(endMs)
+    || startMs < 0 || endMs <= startMs
     || typeof record.speakerId !== "string" || !speakerIdPattern.test(record.speakerId)) return null;
   return record as LocalSpeakerTurn;
 }
@@ -110,15 +116,20 @@ function parseTurn(value: unknown): LocalSpeakerTurn | null {
 function parseJob(value: unknown): LocalSpeakerJob {
   const record = asObject(value);
   const statuses = ["queued", "decoding", "diarizing", "ready", "failed", "cancelled"];
+  const progress = record?.progress;
+  const expectedSpeakers = record?.expectedSpeakers;
+  const durationMs = record?.durationMs;
+  const chunkIndex = record?.chunkIndex;
+  const chunkCount = record?.chunkCount;
   if (!record || typeof record.jobId !== "string" || !statuses.includes(String(record.status))
-    || !Number.isInteger(record.progress) || record.progress < 0 || record.progress > 100
-    || !(record.expectedSpeakers === null || (Number.isInteger(record.expectedSpeakers) && record.expectedSpeakers >= 1 && record.expectedSpeakers <= 8))
-    || !(record.durationMs === null || (Number.isInteger(record.durationMs) && record.durationMs > 0))
+    || !isInteger(progress) || progress < 0 || progress > 100
+    || !(expectedSpeakers === null || (isInteger(expectedSpeakers) && expectedSpeakers >= 1 && expectedSpeakers <= 8))
+    || !(durationMs === null || (isInteger(durationMs) && durationMs > 0))
     || !(record.error === null || typeof record.error === "string")
     || (record.mode !== undefined && !["diarization", "voiceprint"].includes(String(record.mode)))
-    || !Number.isInteger(record.chunkIndex) || record.chunkIndex < 0
-    || !Number.isInteger(record.chunkCount) || record.chunkCount < 0
-    || record.chunkIndex > record.chunkCount || !Array.isArray(record.segments)) {
+    || !isInteger(chunkIndex) || chunkIndex < 0
+    || !isInteger(chunkCount) || chunkCount < 0
+    || chunkIndex > chunkCount || !Array.isArray(record.segments)) {
     throw new Error("本地说话人服务返回了无法识别的任务数据");
   }
   const segments = record.segments.map(parseTurn);

@@ -81,6 +81,21 @@ test("shows chunk progress for long local speaker jobs", async () => {
   assert.match(panel, /第 \$\{chunkIndex\}\/\$\{chunkCount\} 块/);
 });
 
+test("documents the two-speaker voiceprint workflow and fallback", async () => {
+  const [rootReadme, localReadme] = await Promise.all([
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+    readFile(new URL("../local-audio-service/README.md", import.meta.url), "utf8"),
+  ]);
+  for (const content of [rootReadme, localReadme]) {
+    assert.match(content, /已有小宇宙文稿/);
+    assert.match(content, /10[–-]30 秒/);
+    assert.match(content, /低置信度/);
+    assert.match(content, /Hugging Face/);
+    assert.match(content, /本机处理/);
+    assert.match(content, /全自动/);
+  }
+});
+
 test("selects CUDA packages when an NVIDIA GPU is available", async () => {
   const [setup, start] = await Promise.all([
     readFile(new URL("../scripts/setup-local-speaker-service.ps1", import.meta.url), "utf8"),
