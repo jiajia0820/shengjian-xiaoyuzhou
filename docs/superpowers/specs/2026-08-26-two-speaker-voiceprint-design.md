@@ -33,7 +33,7 @@
 - 语音检测：封装为独立 VAD 接口。首版使用本地轻量实现，优先跳过静音，不新增 ASR；若基准音频显示边界质量不足，可在同一接口内替换 Silero VAD/CAM++，不改变任务和前端协议。
 - 设备：沿用 `SPEAKER_DEVICE=auto|cpu|cuda`。声纹嵌入模型和 VAD 模型在 CUDA 可用且能移入显存时使用 GPU，失败时回退 CPU，并通过健康接口报告实际设备。
 
-实现状态（2026-08-27）：参考区间契约、二分类/平滑、10 分钟分块 `VoiceprintEngine`、JobManager/FastAPI 协议、浏览器播放器和 artifact/Markdown 来源均已接入；模型仍采用按需加载，尚未在本机下载真实 WeSpeaker 权重。速度、显存和准确率待使用真实双人音频基准后再调整。
+实现状态（2026-08-27）：参考区间契约、二分类/平滑、10 分钟分块 `VoiceprintEngine`、JobManager/FastAPI 协议、浏览器播放器和 artifact/Markdown 来源均已接入。已在本机缓存真实 WeSpeaker 权重，并用 5 分钟双人 WAV 完成一次 CUDA 实测：使用 MX450 时约 19.7 秒，返回 34 个时间区间且只包含两个已知说话人。Windows 若遇到 torchcodec DLL 不兼容，会自动回退到 FFmpeg 命令行解码；该基准用于验证链路，不代表所有音频的准确率或固定处理速度。
 
 上述模型/API 依据 pyannote.audio 官方文档和 Hugging Face 模型页；速度、相似度阈值和显存占用必须以本机 5 分钟基准实测为准，不在规格中承诺固定倍速。
 

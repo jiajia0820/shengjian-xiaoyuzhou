@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import math
 import os
+import shutil
+import subprocess
+import sys
+from array import array
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -18,6 +23,8 @@ VOICEPRINT_MIN_REFERENCE_SPEECH_MS = 3_000
 VOICEPRINT_MIN_SIMILARITY = 0.35
 VOICEPRINT_MIN_MARGIN = 0.05
 VOICEPRINT_MIN_TURN_MS = 750
+_FFMPEG_DLL_HANDLES: list[object] = []
+_CONFIGURED_FFMPEG_DIRS: set[str] = set()
 
 
 class DiarizationEngine(Protocol):
@@ -43,16 +50,94 @@ class ModelSetupError(Exception):
         self.code = code
 
 
-def _decode_audio_range(path: Path, start_ms: int, end_ms: int):
-    try:
-        from torchcodec.decoders import AudioDecoder
-    except ImportError as error:
-        raise ModelSetupError("TORCHCODEC_UNAVAILABLE") from error
+@dataclass(frozen=True)
+class _DecodedAudioRange:
+    data: object
+    sample_rate: int
+
+
+def _configure_ffmpeg_shared_bin() -> None:
+    shared_bin = os.environ.get("FFMPEG_SHARED_BIN", "").strip()
+    if not shared_bin or not os.path.isdir(shared_bin):
+        return
+    normalized = os.path.normcase(os.path.abspath(shared_bin))
+    if normalized not in _CONFIGURED_FFMPEG_DIRS:
+        if hasattr(os, "add_dll_directory"):
+            try:
+                _FFMPEG_DLL_HANDLES.append(os.add_dll_directory(shared_bin))
+            except OSError:
+                pass
+        _CONFIGURED_FFMPEG_DIRS.add(normalized)
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    if shared_bin not in path_entries:
+        os.environ["PATH"] = shared_bin + os.pathsep + os.environ.get("PATH", "")
+
+
+def _decode_audio_range_with_torchcodec(path: Path, start_ms: int, end_ms: int):
+    _configure_ffmpeg_shared_bin()
+    from torchcodec.decoders import AudioDecoder
     decoder = AudioDecoder(str(path), sample_rate=16_000, num_channels=1)
     return decoder.get_samples_played_in_range(
         start_seconds=start_ms / 1000,
         stop_seconds=end_ms / 1000,
     )
+
+
+def _decode_audio_range_with_ffmpeg(path: Path, start_ms: int, end_ms: int) -> _DecodedAudioRange:
+    duration_ms = int(end_ms) - int(start_ms)
+    if start_ms < 0 or duration_ms <= 0:
+        raise ModelSetupError("AUDIO_DECODE_FAILED")
+
+    ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+    command = [
+        ffmpeg,
+        "-v", "error",
+        "-ss", f"{start_ms / 1000:.3f}",
+        "-i", str(path),
+        "-t", f"{duration_ms / 1000:.3f}",
+        "-vn", "-sn", "-dn",
+        "-ac", "1",
+        "-ar", "16000",
+        "-f", "f32le",
+        "-acodec", "pcm_f32le",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            timeout=max(30, min(300, duration_ms // 1000 + 30)),
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ModelSetupError("AUDIO_DECODE_FAILED") from error
+
+    raw = result.stdout if isinstance(result.stdout, bytes) else b""
+    if result.returncode != 0 or not raw or len(raw) % 4:
+        raise ModelSetupError("AUDIO_DECODE_FAILED")
+
+    try:
+        import torch
+        values = array("f")
+        values.frombytes(raw)
+        if values.itemsize != 4:
+            raise ValueError("unsupported float size")
+        if sys.byteorder != "little":
+            values.byteswap()
+        waveform = torch.frombuffer(memoryview(values), dtype=torch.float32).clone().reshape(1, -1)
+    except Exception as error:
+        raise ModelSetupError("AUDIO_DECODE_FAILED") from error
+    return _DecodedAudioRange(data=waveform, sample_rate=16_000)
+
+
+def _decode_audio_range(path: Path, start_ms: int, end_ms: int):
+    try:
+        return _decode_audio_range_with_torchcodec(path, start_ms, end_ms)
+    except Exception as torchcodec_error:
+        try:
+            return _decode_audio_range_with_ffmpeg(path, start_ms, end_ms)
+        except ModelSetupError as fallback_error:
+            raise fallback_error from torchcodec_error
 
 
 def _get_huggingface_token() -> str | None:
@@ -67,13 +152,9 @@ def _get_huggingface_token() -> str | None:
 
 
 def _load_pipeline(token: str):
-    shared_bin = os.environ.get("FFMPEG_SHARED_BIN", "").strip()
-    if shared_bin and os.path.isdir(shared_bin):
-        # Windows does not reliably resolve FFmpeg DLLs from PATH for ctypes.
-        # Register the directory explicitly before torchcodec is first used.
-        if hasattr(os, "add_dll_directory"):
-            os.add_dll_directory(shared_bin)
-        os.environ["PATH"] = shared_bin + os.pathsep + os.environ.get("PATH", "")
+    # Windows does not reliably resolve FFmpeg DLLs from PATH for ctypes.
+    # Register the directory explicitly before torchcodec is first used.
+    _configure_ffmpeg_shared_bin()
     try:
         from pyannote.audio import Pipeline
     except ImportError as error:

@@ -25,6 +25,8 @@
 
 安装脚本检测到 NVIDIA GPU 时会优先安装 CUDA 12.8 版 PyTorch；没有 NVIDIA GPU 时安装 CPU 版。可用 `SPEAKER_TORCH_INDEX_URL` 临时覆盖 wheel 地址。`.venv/Scripts/hf.exe auth login` 会在本机保存 Hugging Face 凭据；首次运行需要联网下载 pyannote Community-1 模型，使用两人声纹时还会按需下载 `pyannote/wespeaker-voxceleb-resnet34-LM`。模型缓存完成后，音频只在本机处理。请不要把 token 写入 `.env`、仓库、浏览器配置或截图；服务会从本机 Hugging Face 登录状态读取它，也可读取你临时设置的 `HF_TOKEN` 环境变量。
 
+Windows 音频解码会优先尝试 `torchcodec`。如果安装的 FFmpeg 是静态版、导致 torchcodec 的 DLL 无法加载，服务会自动改用 PATH 中的 `ffmpeg` 命令输出 16kHz 单声道 PCM；只要 `ffmpeg` 和 `ffprobe` 可直接运行即可，不需要手动复制 DLL。也可以通过 `FFMPEG_SHARED_BIN` 指向 shared 版 FFmpeg 的 `bin` 目录，让 torchcodec 直接工作。
+
 若网页部署在非 `localhost:3000` 的地址，启动服务前只需在当前 PowerShell 会话设置受信任网页 Origin，例如：
 
 ```powershell

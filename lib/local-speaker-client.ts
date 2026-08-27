@@ -50,6 +50,7 @@ export function localSpeakerErrorMessage(code: string | null): string {
     case "AUDIO_TOO_LARGE": return "音频超过 1GB，未开始处理";
     case "AUDIO_TOO_LONG": return "音频超过 2 小时，未开始处理";
     case "AUDIO_TYPE_UNSUPPORTED": return "该音频格式暂不支持";
+    case "AUDIO_DECODE_FAILED": return "音频解码失败，请确认 FFmpeg 已安装并在 PATH 中";
     case "JOB_NOT_FOUND": return "本地任务已过期或已被清理";
     case "DIARIZATION_FAILED": return "本地说话人识别失败，请检查音频和模型配置";
     case "VOICEPRINT_REFERENCES_INVALID": return "两段参考音频需各为 10–30 秒、位于音频内且不能重叠";

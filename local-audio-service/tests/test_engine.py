@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import struct
 import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
@@ -8,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.engine import ModelSetupError, PyannoteCommunityEngine, VoiceprintEngine
+from app.engine import ModelSetupError, PyannoteCommunityEngine, VoiceprintEngine, _decode_audio_range
 from app.models import VoiceprintReference
 
 
@@ -96,6 +98,48 @@ class FlatVoiceprintEncoder:
 
 
 class PyannoteCommunityEngineTests(unittest.TestCase):
+    def test_registers_shared_ffmpeg_directory_for_torchcodec(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict("os.environ", {"FFMPEG_SHARED_BIN": directory}, clear=False), \
+             patch("app.engine.os.add_dll_directory", return_value=object(), create=True) as add_dll_directory:
+            from app.engine import _configure_ffmpeg_shared_bin
+
+            _configure_ffmpeg_shared_bin()
+            add_dll_directory.assert_called_once_with(directory)
+            self.assertTrue(os.environ.get("PATH", "").startswith(directory + os.pathsep))
+
+    def test_decode_audio_range_falls_back_to_ffmpeg_when_torchcodec_cannot_load(self):
+        import types
+        # PyTorch's Windows loader calls subprocess while importing; load it
+        # before replacing subprocess.run with the FFmpeg stub below.
+        import torch
+
+        torchcodec = types.ModuleType("torchcodec")
+        decoders = types.ModuleType("torchcodec.decoders")
+
+        class BrokenAudioDecoder:
+            def __init__(self, *args, **kwargs):
+                raise RuntimeError("Could not load libtorchcodec")
+
+        decoders.AudioDecoder = BrokenAudioDecoder
+        torchcodec.decoders = decoders
+        pcm = b"".join(struct.pack("<f", value) for value in (0.25, -0.5, 0.75))
+        completed = SimpleNamespace(returncode=0, stdout=pcm, stderr=b"")
+
+        with patch.dict(sys.modules, {"torchcodec": torchcodec, "torchcodec.decoders": decoders}), \
+             patch("subprocess.run", return_value=completed) as run:
+            samples = _decode_audio_range(Path("sample.wav"), 1_000, 2_500)
+
+        self.assertEqual(samples.sample_rate, 16_000)
+        self.assertEqual(tuple(samples.data.shape), (1, 3))
+        self.assertEqual(samples.data.tolist(), [[0.25, -0.5, 0.75]])
+        command = run.call_args.args[0]
+        self.assertEqual(Path(command[0]).stem.lower(), "ffmpeg")
+        self.assertIn("-f", command)
+        self.assertIn("f32le", command)
+
     def test_auto_device_uses_cuda_when_available(self):
         engine = PyannoteCommunityEngine()
         pipeline = FakePipeline()

@@ -10,6 +10,7 @@ import {
 test("长音频限制提示为 2 小时和 1GB", () => {
   assert.match(localSpeakerErrorMessage("AUDIO_TOO_LONG"), /2 小时/);
   assert.match(localSpeakerErrorMessage("AUDIO_TOO_LARGE"), /1GB/);
+  assert.match(localSpeakerErrorMessage("AUDIO_DECODE_FAILED"), /解码/);
 });
 
 test("本地服务请求带专用请求头且不携带站点认证 cookie", async () => {
