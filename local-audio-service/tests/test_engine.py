@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.engine import ModelSetupError, PyannoteCommunityEngine
+from app.engine import ModelSetupError, PyannoteCommunityEngine, VoiceprintEngine
+from app.models import VoiceprintReference
 
 
 class FakeSegment:
@@ -68,6 +69,30 @@ class ChunkPipeline:
     def __call__(self, file, **kwargs):
         self.calls.append((file, kwargs))
         return FakeOutput(ChunkAnnotation(self._outputs[len(self.calls) - 1]))
+
+
+class FakeVoiceprintVAD:
+    def __init__(self):
+        self.calls = 0
+
+    def detect(self, waveform, sample_rate):
+        self.calls += 1
+        return [(1_000, 9_000)] if self.calls <= 2 else [(20_000, 28_000)]
+
+
+class FakeVoiceprintEncoder:
+    def __init__(self):
+        self.calls = 0
+
+    def embed(self, waveforms, sample_rate):
+        self.calls += 1
+        vector = [1.0, 0.0] if self.calls % 2 else [0.0, 1.0]
+        return [vector for _ in waveforms]
+
+
+class FlatVoiceprintEncoder:
+    def embed(self, waveforms, sample_rate):
+        return [[1.0, 1.0] for _ in waveforms]
 
 
 class PyannoteCommunityEngineTests(unittest.TestCase):
@@ -141,6 +166,43 @@ class PyannoteCommunityEngineTests(unittest.TestCase):
         self.assertEqual([call[0]["waveform"] for call in pipeline.calls], [
             "waveform", "waveform", "waveform",
         ])
+
+    def test_voiceprint_identify_uses_reference_centers_and_absolute_chunk_times(self):
+        encoder = FakeVoiceprintEncoder()
+        engine = VoiceprintEngine(vad=FakeVoiceprintVAD(), encoder=encoder)
+        with patch("app.engine._get_huggingface_token", return_value="test-token"), \
+             patch("app.engine.probe_duration_ms", return_value=25 * 60 * 1000), \
+             patch("app.engine._decode_audio_range", return_value=RangeSamples()):
+            turns = engine.identify(Path("sample.wav"), (
+                VoiceprintReference("speaker_0", 0, 10_000),
+                VoiceprintReference("speaker_1", 20_000, 30_000),
+            ), lambda _: None)
+
+        self.assertTrue(turns)
+        self.assertEqual(turns, sorted(turns, key=lambda turn: turn.start_ms))
+        self.assertTrue(all(turn.end_ms > turn.start_ms for turn in turns))
+        self.assertTrue({turn.speaker_id for turn in turns} <= {"speaker_0", "speaker_1"})
+        self.assertGreaterEqual(max(turn.start_ms for turn in turns), 20 * 60 * 1000)
+
+    def test_voiceprint_identify_requires_token_when_encoder_is_not_injected(self):
+        engine = VoiceprintEngine(vad=FakeVoiceprintVAD())
+        with patch("app.engine._get_huggingface_token", return_value=None):
+            with self.assertRaisesRegex(ModelSetupError, "HF_TOKEN_MISSING"):
+                engine.identify(Path("sample.wav"), (
+                    VoiceprintReference("speaker_0", 0, 10_000),
+                    VoiceprintReference("speaker_1", 20_000, 30_000),
+                ), lambda _: None)
+
+    def test_voiceprint_identify_reports_low_confidence_without_publishing_turns(self):
+        engine = VoiceprintEngine(vad=FakeVoiceprintVAD(), encoder=FlatVoiceprintEncoder())
+        with patch("app.engine._get_huggingface_token", return_value="test-token"), \
+             patch("app.engine.probe_duration_ms", return_value=60_000), \
+             patch("app.engine._decode_audio_range", return_value=RangeSamples()):
+            with self.assertRaisesRegex(ModelSetupError, "VOICEPRINT_LOW_CONFIDENCE"):
+                engine.identify(Path("sample.wav"), (
+                    VoiceprintReference("speaker_0", 0, 10_000),
+                    VoiceprintReference("speaker_1", 20_000, 30_000),
+                ), lambda _: None)
 
 
 if __name__ == "__main__":
