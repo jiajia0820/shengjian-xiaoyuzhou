@@ -7,9 +7,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.models import VoiceprintReference
+from app.models import DiarizationTurn, VoiceprintReference
 from app.voiceprint import (
     VoiceprintInputError,
+    classify_embedding,
+    merge_labeled_windows,
     parse_voiceprint_references,
     validate_voiceprint_reference_bounds,
 )
@@ -45,5 +47,26 @@ class VoiceprintValidationTests(unittest.TestCase):
         }))
         with self.assertRaisesRegex(VoiceprintInputError, "VOICEPRINT_REFERENCES_INVALID"):
             validate_voiceprint_reference_bounds(out_of_range, duration_ms=60_000)
+
+
+class VoiceprintMathTests(unittest.TestCase):
+    def test_classifies_nearest_reference_and_leaves_low_margin_unknown(self):
+        centers = {
+            "speaker_0": [1.0, 0.0],
+            "speaker_1": [0.0, 1.0],
+        }
+        self.assertEqual(classify_embedding([0.98, 0.02], centers, min_similarity=0.7, min_margin=0.1), "speaker_0")
+        self.assertEqual(classify_embedding([0.5, 0.5], centers, min_similarity=0.7, min_margin=0.1), None)
+
+    def test_merges_only_stable_adjacent_windows_and_drops_unknown_windows(self):
+        windows = [
+            (0, 1_500, "speaker_0"), (750, 2_250, "speaker_0"),
+            (1_500, 3_000, None), (2_250, 3_750, "speaker_1"),
+            (3_000, 4_500, "speaker_1"),
+        ]
+        self.assertEqual(merge_labeled_windows(windows, hop_ms=750, min_turn_ms=750), [
+            DiarizationTurn(0, 2_250, "speaker_0"),
+            DiarizationTurn(2_250, 4_500, "speaker_1"),
+        ])
 if __name__ == "__main__":
     unittest.main()
