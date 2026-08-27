@@ -5,6 +5,7 @@ from threading import Event
 from typing import Literal
 
 JobStatus = Literal["queued", "decoding", "diarizing", "ready", "failed", "cancelled"]
+JobMode = Literal["diarization", "voiceprint"]
 
 
 @dataclass(frozen=True)
@@ -12,6 +13,13 @@ class DiarizationTurn:
     start_ms: int
     end_ms: int
     speaker_id: str
+
+
+@dataclass(frozen=True)
+class VoiceprintReference:
+    speaker_id: str
+    start_ms: int
+    end_ms: int
 
 
 @dataclass(frozen=True)
