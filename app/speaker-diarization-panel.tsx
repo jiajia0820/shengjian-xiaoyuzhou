@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { apiFetch } from "@/lib/auth-client";
 import {
   cancelLocalSpeakerJob,
@@ -8,8 +8,14 @@ import {
   getLocalSpeakerHealth,
   getLocalSpeakerJob,
   localSpeakerErrorMessage,
+  type LocalSpeakerMode,
   type LocalSpeakerTurn,
 } from "@/lib/local-speaker-client";
+import {
+  VOICEPRINT_LABELS,
+  validateVoiceprintReferences,
+  type VoiceprintReferences,
+} from "@/lib/voiceprint";
 
 type Notice = { kind: "success" | "error" | "info"; text: string };
 type Phase = "idle" | "validating" | "uploading" | "diarizing" | "reviewing" | "saving";
@@ -23,10 +29,17 @@ type ReviewSegment = {
   speakerNeedsReview: boolean;
 };
 type Preview = { segments: ReviewSegment[]; labels: SpeakerLabel[]; markdown: string; reviewCount: number };
+type ReferenceSpeakerId = keyof VoiceprintReferences;
+type ReferenceInput = { start: string; end: string };
+type ReferenceInputs = Record<ReferenceSpeakerId, ReferenceInput>;
 
 const MAX_BYTES = 1 * 1024 * 1024 * 1024;
 const MAX_DURATION_SECONDS = 2 * 60 * 60;
 const AUDIO_ACCEPT = ".mp3,.m4a,.wav,.flac,.ogg,.mp4,.webm";
+const DEFAULT_REFERENCE_INPUTS: ReferenceInputs = {
+  speaker_0: { start: "", end: "" },
+  speaker_1: { start: "", end: "" },
+};
 
 function formatTime(milliseconds: number): string {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -44,26 +57,18 @@ function phaseLabel(phase: Phase): string {
   }[phase];
 }
 
-async function audioDurationSeconds(file: File): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const audio = document.createElement("audio");
-    const objectUrl = URL.createObjectURL(file);
-    const cleanup = () => URL.revokeObjectURL(objectUrl);
-    audio.preload = "metadata";
-    audio.onloadedmetadata = () => {
-      cleanup();
-      if (Number.isFinite(audio.duration) && audio.duration > 0) {
-        resolve(audio.duration);
-      } else {
-        reject(new Error("无法读取音频时长"));
-      }
-    };
-    audio.onerror = () => {
-      cleanup();
-      reject(new Error("浏览器无法读取该音频；将由本地服务再次检查"));
-    };
-    audio.src = objectUrl;
-  });
+function toVoiceprintReferences(inputs: ReferenceInputs): VoiceprintReferences {
+  const milliseconds = (value: string) => Math.round(Number(value) * 1000);
+  return {
+    speaker_0: {
+      startMs: milliseconds(inputs.speaker_0.start),
+      endMs: milliseconds(inputs.speaker_0.end),
+    },
+    speaker_1: {
+      startMs: milliseconds(inputs.speaker_1.start),
+      endMs: milliseconds(inputs.speaker_1.end),
+    },
+  };
 }
 
 async function responseJson<T>(response: Response): Promise<T> {
@@ -85,7 +90,11 @@ export function SpeakerDiarizationPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioDurationMs, setAudioDurationMs] = useState<number | null>(null);
+  const [mode, setMode] = useState<LocalSpeakerMode>("diarization");
   const [expectedSpeakers, setExpectedSpeakers] = useState<number | null>(null);
+  const [referenceInputs, setReferenceInputs] = useState<ReferenceInputs>(DEFAULT_REFERENCE_INPUTS);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
   const [chunkIndex, setChunkIndex] = useState(0);
@@ -98,18 +107,38 @@ export function SpeakerDiarizationPanel({
   const [error, setError] = useState<string | null>(null);
   const jobIdRef = useRef<string | null>(null);
   const cancelledRef = useRef(false);
+  const audioUrlRef = useRef<string | null>(null);
 
   const busy = ["validating", "uploading", "diarizing", "saving"].includes(phase);
+  const speakerEngine = mode === "voiceprint"
+    ? "pyannote-wespeaker-voiceprint-v1" as const
+    : "pyannote-community-1" as const;
+
+  useEffect(() => () => {
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    audioUrlRef.current = null;
+  }, []);
 
   function updatePhase(next: Phase) {
     setPhase(next);
     onBusyChange?.(["validating", "uploading", "diarizing", "saving"].includes(next));
   }
 
+  function releaseAudioUrl() {
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    audioUrlRef.current = null;
+    setAudioUrl(null);
+    setAudioDurationMs(null);
+  }
+
   function reset() {
     jobIdRef.current = null;
     cancelledRef.current = false;
+    releaseAudioUrl();
     setFile(null);
+    setMode("diarization");
+    setExpectedSpeakers(null);
+    setReferenceInputs(DEFAULT_REFERENCE_INPUTS);
     setPreview(null);
     setTurns([]);
     setLabels([]);
@@ -119,6 +148,26 @@ export function SpeakerDiarizationPanel({
     setChunkCount(0);
     setError(null);
     updatePhase("idle");
+  }
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const nextFile = event.target.files?.[0] ?? null;
+    releaseAudioUrl();
+    setFile(nextFile);
+    setError(null);
+    if (nextFile) {
+      const nextUrl = URL.createObjectURL(nextFile);
+      audioUrlRef.current = nextUrl;
+      setAudioUrl(nextUrl);
+    }
+  }
+
+  function updateReference(speakerId: ReferenceSpeakerId, field: "start" | "end", value: string) {
+    setReferenceInputs((current) => ({
+      ...current,
+      [speakerId]: { ...current[speakerId], [field]: value },
+    }));
+    setError(null);
   }
 
   async function close() {
@@ -131,14 +180,21 @@ export function SpeakerDiarizationPanel({
     reset();
   }
 
-  async function createPreview(turns: LocalSpeakerTurn[]) {
+  async function createPreview(nextTurns: LocalSpeakerTurn[]) {
     const data = await responseJson<{ preview: Preview }>(await apiFetch(`/api/episodes/${episode.eid}/speakers/preview`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ turns }),
+      body: JSON.stringify({ turns: nextTurns, engine: speakerEngine }),
     }));
-    setPreview(data.preview);
-    setLabels(data.preview.labels);
+    const nextLabels = mode === "voiceprint"
+      ? data.preview.labels.map((label) => ({
+        ...label,
+        label: VOICEPRINT_LABELS[label.id as ReferenceSpeakerId] ?? label.label,
+      }))
+      : data.preview.labels;
+    const nextPreview = { ...data.preview, labels: nextLabels };
+    setPreview(nextPreview);
+    setLabels(nextLabels);
     updatePhase("reviewing");
   }
 
@@ -153,19 +209,31 @@ export function SpeakerDiarizationPanel({
     try {
       updatePhase("validating");
       if (file.size > MAX_BYTES) throw new Error("音频超过 1GB，未开始处理");
-      try {
-        const duration = await audioDurationSeconds(file);
-        if (duration > MAX_DURATION_SECONDS) throw new Error("音频超过 2 小时，未开始处理");
-      } catch (metadataError) {
-        if (metadataError instanceof Error && metadataError.message.includes("超过")) throw metadataError;
+      if (audioDurationMs !== null && audioDurationMs > MAX_DURATION_SECONDS * 1000) {
+        throw new Error("音频超过 2 小时，未开始处理");
+      }
+
+      let references: VoiceprintReferences | undefined;
+      if (mode === "voiceprint") {
+        if (audioDurationMs === null) throw new Error("请等待播放器读取音频时长后再开始");
+        references = toVoiceprintReferences(referenceInputs);
+        const validationError = validateVoiceprintReferences(references, audioDurationMs);
+        if (validationError) throw new Error(validationError);
       }
 
       const health = await getLocalSpeakerHealth();
       if (!health.ffmpegAvailable) throw new Error("本地服务找不到 FFmpeg，请安装后重新启动服务");
-      if (health.model === "needs_setup") throw new Error("本地模型尚未登录。请在项目根目录运行 .\\local-audio-service\\.venv\\Scripts\\hf.exe auth login");
+      if (mode === "voiceprint" && health.voiceprintModel === "needs_setup") {
+        throw new Error("声纹模型尚未登录。请在项目根目录运行 .\\local-audio-service\\.venv\\Scripts\\hf.exe auth login");
+      }
+      if (mode === "diarization" && health.model === "needs_setup") {
+        throw new Error("本地模型尚未登录。请在项目根目录运行 .\\local-audio-service\\.venv\\Scripts\\hf.exe auth login");
+      }
 
       updatePhase("uploading");
-      const job = await createLocalSpeakerJob(file, expectedSpeakers);
+      const job = mode === "voiceprint"
+        ? await createLocalSpeakerJob(file, { mode: "voiceprint", references: references as VoiceprintReferences })
+        : await createLocalSpeakerJob(file, { mode: "diarization", expectedSpeakers });
       jobIdRef.current = job.jobId;
       updatePhase("diarizing");
       for (;;) {
@@ -205,7 +273,7 @@ export function SpeakerDiarizationPanel({
       const data = await responseJson<{ markdown: string; reviewCount: number }>(await apiFetch(`/api/episodes/${episode.eid}/speakers`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ turns, labels, overrides: overrideItems }),
+        body: JSON.stringify({ turns, labels, overrides: overrideItems, engine: speakerEngine }),
       }));
       onSaved(data.markdown);
       reportNotice({ kind: "success", text: data.reviewCount ? `已保存；仍有 ${data.reviewCount} 段待确认` : "已按说话人轮次保存当前稿" });
@@ -233,18 +301,50 @@ export function SpeakerDiarizationPanel({
 
         {!preview ? <div className="speaker-upload-form">
           <label>选择本地音频
-            <input aria-label="选择本地音频" type="file" accept={AUDIO_ACCEPT} disabled={busy}
-              onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+            <input aria-label="选择本地音频" type="file" accept={AUDIO_ACCEPT} disabled={busy} onChange={handleFileChange} />
           </label>
           {file && <small>{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB</small>}
-          <label>说话人数
+          {file && audioUrl && <div className="speaker-audio">
+            <audio controls preload="metadata" src={audioUrl}
+              onLoadedMetadata={(event) => {
+                const duration = event.currentTarget.duration;
+                if (Number.isFinite(duration) && duration > 0) setAudioDurationMs(Math.round(duration * 1000));
+              }}
+              onError={() => setError("浏览器无法读取音频时长；本地服务仍会再次检查")}
+            ><track kind="captions" /></audio>
+            <small>{audioDurationMs ? `音频时长：${formatTime(audioDurationMs)}` : "正在读取音频时长…"}</small>
+          </div>}
+          <label>识别模式
+            <select aria-label="识别模式" value={mode} disabled={busy} onChange={(event) => setMode(event.target.value as LocalSpeakerMode)}>
+              <option value="diarization">全自动识别</option>
+              <option value="voiceprint">两人声纹</option>
+            </select>
+          </label>
+          {mode === "diarization" && <label>说话人数
             <select value={expectedSpeakers ?? "auto"} disabled={busy}
               onChange={(event) => setExpectedSpeakers(event.target.value === "auto" ? null : Number(event.target.value))}>
               <option value="auto">自动判断</option>
               {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => <option key={count} value={count}>{count} 人</option>)}
             </select>
-          </label>
-              <small>上限：2 小时、1GB。将按约 10 分钟分块处理。需要先运行 scripts/start-local-speaker-service.ps1。</small>
+          </label>}
+          {mode === "voiceprint" && <div className="speaker-reference-form">
+            <p className="speaker-reference-hint">两人声纹模式只适合已有小宇宙文稿的双人节目。请在播放器中找到只有一人连续说话的片段，各选 10–30 秒；避开片头音乐、多人抢话和明显噪声。</p>
+            <div className="speaker-reference-grid">
+              {(["speaker_0", "speaker_1"] as const).map((speakerId) => <div className="speaker-reference-card" key={speakerId}>
+                <strong>{speakerId === "speaker_0" ? "主持人参考" : "嘉宾参考"}</strong>
+                <label>开始（秒）
+                  <input type="number" min="0" step="0.1" inputMode="decimal" value={referenceInputs[speakerId].start}
+                    onChange={(event) => updateReference(speakerId, "start", event.target.value)} />
+                </label>
+                <label>结束（秒）
+                  <input type="number" min="0" step="0.1" inputMode="decimal" value={referenceInputs[speakerId].end}
+                    onChange={(event) => updateReference(speakerId, "end", event.target.value)} />
+                </label>
+              </div>)}
+            </div>
+            <small>每段必须为 10–30 秒、在音频时长内，且两段不能重叠。</small>
+          </div>}
+          <small>上限：2 小时、1GB。将按约 10 分钟分块处理。需要先运行 scripts/start-local-speaker-service.ps1。</small>
           <div className="speaker-progress" aria-live="polite">{phaseLabel(phase)}{phase === "diarizing" && ` ${progress}%`}{phase === "diarizing" && chunkCount > 0 && ` · 第 ${chunkIndex}/${chunkCount} 块`}</div>
           {error && <p className="speaker-error" role="alert">{error}</p>}
           <div className="speaker-modal-actions">

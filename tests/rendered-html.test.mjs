@@ -60,6 +60,14 @@ test("wires a local-only speaker review panel into the transcript toolbar", asyn
   assert.match(panel, /JSON\.stringify\(\{ turns, labels, overrides/);
   assert.match(panel, /音频不会上传/);
   assert.match(panel, /取消本地任务/);
+  assert.match(panel, /两人声纹/);
+  assert.match(panel, /主持人参考/);
+  assert.match(panel, /嘉宾参考/);
+  assert.match(panel, /<audio[^>]+controls/);
+  assert.match(panel, /validateVoiceprintReferences/);
+  assert.match(panel, /mode: "voiceprint"/);
+  assert.match(panel, /references/);
+  assert.match(panel, /URL\.revokeObjectURL/);
   assert.match(styles, /\.speaker-diarization-modal\s*\{[^}]*max-height:/);
   assert.match(styles, /\.speaker-review-list\s*\{[^}]*overflow-y:\s*auto/);
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.speaker-label-grid/);
