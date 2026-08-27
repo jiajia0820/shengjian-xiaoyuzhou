@@ -4,7 +4,7 @@
 
 **Goal:** 在不改变现有全自动说话人识别的前提下，增加主持人/嘉宾参考片段驱动的本地两人声纹识别，并把结果安全对齐到已有小宇宙文稿。
 
-**Architecture:** 浏览器在现有本地音频面板中选择模式和两个 10–30 秒参考区间；FastAPI 继续负责回环访问、流式上传、任务生命周期和 2 小时/1GB 校验。`JobManager` 根据任务模式调度现有 pyannote 引擎或新的 `VoiceprintEngine`；声纹引擎用轻量语音活动检测跳过静音，用 pyannote WeSpeaker 嵌入模型对两个参考中心做余弦相似度二分类，输出仍为 `speaker_0`/`speaker_1`。Cloudflare 侧继续只接受时间区间，服务器从官方 artifact 重建 Markdown，不信任客户端正文。
+**Architecture:** 浏览器在现有本地音频面板中选择模式和两个 5–30 秒参考区间；FastAPI 继续负责回环访问、流式上传、任务生命周期和 2 小时/1GB 校验。`JobManager` 根据任务模式调度现有 pyannote 引擎或新的 `VoiceprintEngine`；声纹引擎用轻量语音活动检测跳过静音，用 pyannote WeSpeaker 嵌入模型对两个参考中心做余弦相似度二分类，输出仍为 `speaker_0`/`speaker_1`。Cloudflare 侧继续只接受时间区间，服务器从官方 artifact 重建 Markdown，不信任客户端正文。
 
 **Tech Stack:** React 19 + TypeScript + Vinext、FastAPI/Uvicorn、Python `torch`/`torchcodec`/`pyannote.audio`、Hugging Face WeSpeaker 模型、PowerShell、Node `node:test`、Python `unittest`。
 
@@ -94,7 +94,7 @@ class VoiceprintReference:
     end_ms: int
 ```
 
-在 `voiceprint.py` 定义 `MIN_REFERENCE_MS = 10_000`、`MAX_REFERENCE_MS = 30_000`，以及 `VoiceprintInputError`。`parse_voiceprint_references(value)` 只做结构校验：解析 JSON 对象；键集合恰好为 `speaker_0`、`speaker_1`；每个值只接受非负整数 `startMs`/`endMs`；持续时间在 10–30 秒；两段不重叠。另定义 `validate_voiceprint_reference_bounds(references, duration_ms)`，在 `ffprobe` 得到实际时长后检查结束时间不超过音频时长。两类失败都抛出 `VoiceprintInputError("VOICEPRINT_REFERENCES_INVALID")`，不能把原始 JSON、文件名或路径放进异常文本。
+在 `voiceprint.py` 定义 `MIN_REFERENCE_MS = 5_000`、`MAX_REFERENCE_MS = 30_000`，以及 `VoiceprintInputError`。`parse_voiceprint_references(value)` 只做结构校验：解析 JSON 对象；键集合恰好为 `speaker_0`、`speaker_1`；每个值只接受非负整数 `startMs`/`endMs`；持续时间在 5–30 秒；两段不重叠。另定义 `validate_voiceprint_reference_bounds(references, duration_ms)`，在 `ffprobe` 得到实际时长后检查结束时间不超过音频时长。两类失败都抛出 `VoiceprintInputError("VOICEPRINT_REFERENCES_INVALID")`，不能把原始 JSON、文件名或路径放进异常文本。
 
 - [ ] **Step 4: 运行 GREEN 并提交**
 
@@ -327,7 +327,7 @@ git commit -m "feat: route voiceprint jobs through local service"
 
 - [ ] **Step 1: 写失败测试（RED）**
 
-在 `tests/voiceprint.test.ts` 规定浏览器端范围校验：开始/结束均为有限非负整数毫秒、10–30 秒、在给定时长内、两段不重叠；错误返回中文而不是抛出异常。在客户端测试中断言声纹 multipart 包含 `mode=voiceprint` 和 JSON `references`，旧模式字段仍存在。增加 artifact/Markdown 测试：`pyannote-wespeaker-voiceprint-v1` 可解析，并写入 `speaker_source`。
+在 `tests/voiceprint.test.ts` 规定浏览器端范围校验：开始/结束均为有限非负整数毫秒、5–30 秒、在给定时长内、两段不重叠；错误返回中文而不是抛出异常。在客户端测试中断言声纹 multipart 包含 `mode=voiceprint` 和 JSON `references`，旧模式字段仍存在。增加 artifact/Markdown 测试：`pyannote-wespeaker-voiceprint-v1` 可解析，并写入 `speaker_source`。
 
 在 `tests/core.test.ts` 的预览/保存路由场景中传递：
 
@@ -434,11 +434,11 @@ git commit -m "feat: add two-speaker voiceprint controls"
 
 - [ ] **Step 1: 文档测试先行**
 
-在 `tests/rendered-html.test.mjs` 增加静态断言：两份 README 都说明两人模式需要已有文稿、两段 10–30 秒参考、低置信度人工确认、模型首次下载需要 Hugging Face 登录、音频只在本机处理和全自动模式仍可回退。
+在 `tests/rendered-html.test.mjs` 增加静态断言：两份 README 都说明两人模式需要已有文稿、两段 5–30 秒参考、低置信度人工确认、模型首次下载需要 Hugging Face 登录、音频只在本机处理和全自动模式仍可回退。
 
 - [ ] **Step 2: 更新文档**
 
-在本地服务 README 增加实际操作步骤：启动服务后在页面选择“两人声纹”，播放器中找到干净片段并填写主持人/嘉宾开始结束秒数；说明两段不能重叠、参考应避免音乐和多人抢话；解释 `voiceprintModel`/`voiceprintDevice` 健康字段和低置信度提示。主 README 只做功能入口和隐私/版权边界说明。
+在本地服务 README 增加实际操作步骤：启动服务后在页面选择“两人声纹”，播放器中找到干净片段并填写主持人/嘉宾开始结束秒数；说明每段为 5–30 秒（推荐 8–10 秒以上）、两段不能重叠、参考应避免音乐和多人抢话；解释 `voiceprintModel`/`voiceprintDevice` 健康字段和低置信度提示。主 README 只做功能入口和隐私/版权边界说明。
 
 - [ ] **Step 3: 运行 Python 回归**
 
@@ -490,7 +490,7 @@ git commit -m "docs: document two-speaker voiceprint mode"
 
 - [ ] **Step 2: 用 5 分钟双人音频做声纹模式验收**
 
-在页面选择现有 5 分钟双人音频，各选 10–30 秒干净参考，完成识别和预览。记录总耗时、设备、显存、输出区间、待确认数量和人工修正数量；确认保存后的 `speaker_source` 是声纹值、`original.md` 未变、当前稿哈希保护仍生效。
+在页面选择现有 5 分钟双人音频，各选 5–30 秒干净参考（推荐 8–10 秒以上），完成识别和预览。记录总耗时、设备、显存、输出区间、待确认数量和人工修正数量；确认保存后的 `speaker_source` 是声纹值、`original.md` 未变、当前稿哈希保护仍生效。
 
 - [ ] **Step 3: 对比全自动模式**
 

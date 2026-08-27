@@ -13,7 +13,7 @@ export const VOICEPRINT_LABELS = {
   speaker_1: "嘉宾",
 } as const;
 
-export const MIN_VOICEPRINT_REFERENCE_MS = 10_000;
+export const MIN_VOICEPRINT_REFERENCE_MS = 5_000;
 export const MAX_VOICEPRINT_REFERENCE_MS = 30_000;
 
 function validMs(value: unknown): value is number {
@@ -48,7 +48,7 @@ export function validateVoiceprintReferences(
   const [host, guest] = ranges as VoiceprintReferenceRange[];
   for (const range of [host, guest]) {
     const length = range.endMs - range.startMs;
-    if (length < MIN_VOICEPRINT_REFERENCE_MS) return "每段参考需至少 10 秒";
+    if (length < MIN_VOICEPRINT_REFERENCE_MS) return "每段参考需至少 5 秒";
     if (length > MAX_VOICEPRINT_REFERENCE_MS) return "每段参考不能超过 30 秒";
     if (range.endMs > (durationMs as number)) return "参考时间不能超过音频时长";
   }

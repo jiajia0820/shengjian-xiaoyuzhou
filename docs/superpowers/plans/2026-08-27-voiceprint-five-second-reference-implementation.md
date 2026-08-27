@@ -16,9 +16,9 @@
 - Modify: `tests/voiceprint.test.ts`
 - Modify: `local-audio-service/tests/test_voiceprint.py`
 
-- [ ] **Step 1: 将最小有效案例改为 5 秒，并把过短案例改为 4.999 秒。**
+- [x] **Step 1: 将最小有效案例改为 5 秒，并把过短案例改为 4.999 秒。**
 
-- [ ] **Step 2: 运行两份边界测试，确认当前 10 秒实现失败。**
+- [x] **Step 2: 运行两份边界测试，确认当前 10 秒实现失败。**
 
 ```powershell
 node --experimental-strip-types --test tests/voiceprint.test.ts
@@ -39,14 +39,13 @@ Expected: 新增的 5 秒有效案例在旧实现下失败，失败原因是仍�
 - Modify: `docs/superpowers/specs/2026-08-26-two-speaker-voiceprint-design.md`
 - Modify: `docs/superpowers/plans/2026-08-27-two-speaker-voiceprint-implementation.md`
 
-- [ ] **Step 1: 把 TypeScript 和 Python 最小常量统一设为 5,000ms。**
-- [ ] **Step 2: 将浏览器、客户端错误和两个 README 的范围提示统一改为 5–30 秒，并说明 8–10 秒更稳妥。**
-- [ ] **Step 3: 同步规格和实现计划中的契约描述，避免后续文档回退到 10 秒。**
+- [x] **Step 1: 把 TypeScript 和 Python 最小常量统一设为 5,000ms。**
+- [x] **Step 2: 将浏览器、客户端错误和两个 README 的范围提示统一改为 5–30 秒，并说明 8–10 秒更稳妥。**
+- [x] **Step 3: 同步规格和实现计划中的契约描述，避免后续文档回退到 10 秒。**
 
 ### Task 3: 验证并提交
 
-- [ ] **Step 1: 重跑边界测试，确认 5 秒通过且小于 5 秒仍拒绝。**
-- [ ] **Step 2: 运行 `npm test`、`npm run lint`、`npx tsc --noEmit` 和完整 Python 测试。**
-- [ ] **Step 3: 检查 `git diff --check`，确认未纳入 `.env.local` 或凭据。**
-- [ ] **Step 4: 提交修改并重载正在运行的本地网页。**
-
+- [x] **Step 1: 重跑边界测试，确认 5 秒通过且小于 5 秒仍拒绝。**
+- [x] **Step 2: 运行 `npm test`、`npm run lint`、`npx tsc --noEmit` 和完整 Python 测试。**
+- [x] **Step 3: 检查 `git diff --check`，确认未纳入 `.env.local` 或凭据。**
+- [x] **Step 4: 提交修改并重载正在运行的本地网页。**

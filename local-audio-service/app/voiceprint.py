@@ -7,7 +7,7 @@ from typing import Sequence
 
 from .models import DiarizationTurn, VoiceprintReference
 
-MIN_REFERENCE_MS = 10_000
+MIN_REFERENCE_MS = 5_000
 MAX_REFERENCE_MS = 30_000
 VOICEPRINT_SPEAKERS = ("speaker_0", "speaker_1")
 

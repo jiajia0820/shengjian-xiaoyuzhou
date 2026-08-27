@@ -88,7 +88,7 @@ test("documents the two-speaker voiceprint workflow and fallback", async () => {
   ]);
   for (const content of [rootReadme, localReadme]) {
     assert.match(content, /已有小宇宙文稿/);
-    assert.match(content, /10[–-]30 秒/);
+    assert.match(content, /5[–-]30 秒/);
     assert.match(content, /低置信度/);
     assert.match(content, /Hugging Face/);
     assert.match(content, /本机处理/);

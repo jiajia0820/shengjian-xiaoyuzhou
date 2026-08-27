@@ -18,13 +18,13 @@ from app.voiceprint import (
 
 
 class VoiceprintValidationTests(unittest.TestCase):
-    def test_accepts_exactly_two_non_overlapping_10_to_30_second_references(self):
+    def test_accepts_exactly_two_non_overlapping_5_to_30_second_references(self):
         refs = parse_voiceprint_references(json.dumps({
-            "speaker_0": {"startMs": 0, "endMs": 10_000},
+            "speaker_0": {"startMs": 0, "endMs": 5_000},
             "speaker_1": {"startMs": 20_000, "endMs": 50_000},
         }))
         self.assertEqual(refs, (
-            VoiceprintReference("speaker_0", 0, 10_000),
+            VoiceprintReference("speaker_0", 0, 5_000),
             VoiceprintReference("speaker_1", 20_000, 50_000),
         ))
         validate_voiceprint_reference_bounds(refs, duration_ms=60_000)
@@ -33,7 +33,7 @@ class VoiceprintValidationTests(unittest.TestCase):
         cases = [
             {"speaker_0": {"startMs": 0, "endMs": 10_000}},
             {"speaker_0": {"startMs": 0, "endMs": 10_000}, "speaker_1": {"startMs": 5_000, "endMs": 20_000}},
-            {"speaker_0": {"startMs": 0, "endMs": 9_999}, "speaker_1": {"startMs": 20_000, "endMs": 30_000}},
+            {"speaker_0": {"startMs": 0, "endMs": 4_999}, "speaker_1": {"startMs": 20_000, "endMs": 30_000}},
             {"speaker_0": {"startMs": 0, "endMs": 30_001}, "speaker_1": {"startMs": 40_000, "endMs": 50_000}},
         ]
         for value in cases:

@@ -328,7 +328,7 @@ export function SpeakerDiarizationPanel({
             </select>
           </label>}
           {mode === "voiceprint" && <div className="speaker-reference-form">
-            <p className="speaker-reference-hint">两人声纹模式只适合已有小宇宙文稿的双人节目。请在播放器中找到只有一人连续说话的片段，各选 10–30 秒；避开片头音乐、多人抢话和明显噪声。</p>
+            <p className="speaker-reference-hint">两人声纹模式只适合已有小宇宙文稿的双人节目。请在播放器中找到只有一人连续说话的片段，各选 5–30 秒（推荐 8–10 秒以上）；避开片头音乐、多人抢话和明显噪声。</p>
             <div className="speaker-reference-grid">
               {(["speaker_0", "speaker_1"] as const).map((speakerId) => <div className="speaker-reference-card" key={speakerId}>
                 <strong>{speakerId === "speaker_0" ? "主持人参考" : "嘉宾参考"}</strong>
@@ -342,7 +342,7 @@ export function SpeakerDiarizationPanel({
                 </label>
               </div>)}
             </div>
-            <small>每段必须为 10–30 秒、在音频时长内，且两段不能重叠。</small>
+            <small>每段必须为 5–30 秒、在音频时长内，且两段不能重叠；5 秒是最低值，越长通常越稳定。</small>
           </div>}
           <small>上限：2 小时、1GB。将按约 10 分钟分块处理。需要先运行 scripts/start-local-speaker-service.ps1。</small>
           <div className="speaker-progress" aria-live="polite">{phaseLabel(phase)}{phase === "diarizing" && ` ${progress}%`}{phase === "diarizing" && chunkCount > 0 && ` · 第 ${chunkIndex}/${chunkCount} 块`}</div>
