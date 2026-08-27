@@ -36,7 +36,7 @@ npx tsc --noEmit
 npm test
 ```
 
-完整的 Workers 本地运行需要 D1、R2 和 `TOKEN_ENCRYPTION_KEY`。生产环境由 Sites 根据 `.openai/hosting.json` 和迁移文件自动配置。
+完整的 Workers 本地运行需要 D1、R2 和 `TOKEN_ENCRYPTION_KEY`。执行 `npm run dev` 时，如果当前进程没有提供该密钥，脚本会在项目根目录自动生成并复用被 Git 忽略的 `.env.local`；如果你已经配置了 `TOKEN_ENCRYPTION_KEY`，则会优先使用现有值。生产环境由 Sites 根据 `.openai/hosting.json` 和迁移文件自动配置，必须手动设置 Secret，不能依赖本地自动生成。
 
 ### 可选：本地音频说话人分段
 
@@ -48,7 +48,7 @@ npm test
 
 ## 环境变量
 
-- `TOKEN_ENCRYPTION_KEY`：至少 32 字节的随机密钥；在 Sites 中必须标记为 Secret
+- `TOKEN_ENCRYPTION_KEY`：Base64 编码的 32 字节随机密钥；在 Sites 中必须标记为 Secret。仅本地 `npm run dev` 会在缺失时自动写入 `.env.local`。
 - AI 提供商的 API Key 不使用环境变量；登录站点后在“AI 提供商设置”中加密保存。自定义连接的 Base URL 和 API Key 都必须由用户填写
 
 ## 数据迁移
@@ -62,7 +62,7 @@ npm run db:generate
 ## 从 GitHub 复现
 
 1. 使用 Node.js 22.13 或更高版本克隆仓库并运行 `npm ci`。
-2. 复制 `.env.example` 为本地环境变量配置，生成随机的 `TOKEN_ENCRYPTION_KEY`；不要把真实密钥提交到 Git。
+2. 本地开发直接执行 `npm run dev` 即可自动生成并保存 `.env.local` 中的 `TOKEN_ENCRYPTION_KEY`；生产部署仍需在平台 Secret 中手动配置，不要把真实密钥提交到 Git。
 3. 准备 D1、R2、Supabase 和腾讯云验证码配置，并按 `deploy/tencent-hk/` 中的说明配置网关。
 4. 执行 `npm run lint`、`npx tsc --noEmit` 和 `npm test`。
 5. 生产环境推荐使用 Sites/Cloudflare Workers 运行时；本项目依赖 D1、R2 和 Workers 绑定，不能仅通过 GitHub Pages 运行。

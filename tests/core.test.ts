@@ -9,6 +9,7 @@ import { buildMarkdown, formatTimestamp, shownotesToMarkdown } from "../lib/mark
 import { decryptSecret, encryptSecret, phoneHint, sha256Hex } from "../lib/security.ts";
 import {
   getOfficialEpisode,
+  loginWithSms,
   parseEpisodeUrl,
   sendSmsCode,
   XiaoyuzhouError,
@@ -1567,6 +1568,22 @@ test("maps Xiaoyuzhou SMS upstream responses without leaking transport errors", 
         && error.code === "UPSTREAM_UNREACHABLE"
         && error.status === 503
         && error.message === "小宇宙验证码服务暂时无法连接，请稍后重试",
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("将小宇宙英文验证码错误转换为可操作的中文提示", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({ message: "wrong sms code" }, { status: 400 });
+    await assert.rejects(
+      loginWithSms("13800138000", "+86", "123456"),
+      (error: unknown) => error instanceof XiaoyuzhouError
+        && error.code === "LOGIN_FAILED"
+        && error.status === 400
+        && error.message === "验证码错误或已过期，请重新发送并输入最新验证码",
     );
   } finally {
     globalThis.fetch = previousFetch;

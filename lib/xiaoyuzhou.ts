@@ -97,7 +97,14 @@ async function safeJson(response: Response): Promise<Record<string, unknown>> {
 function responseMessage(body: Record<string, unknown>, fallback: string): string {
   for (const key of ["message", "toast", "error"]) {
     const value = body[key];
-    if (typeof value === "string" && value.trim()) return value.trim().slice(0, 240);
+    if (typeof value === "string" && value.trim()) {
+      const message = value.trim();
+      if (/^(?:wrong|invalid|incorrect)\s+(?:sms|verification)\s+code$/i.test(message)
+        || /^(?:sms|verification)\s+code\s+(?:is\s+)?(?:wrong|invalid|incorrect|expired)$/i.test(message)) {
+        return "验证码错误或已过期，请重新发送并输入最新验证码";
+      }
+      return message.slice(0, 240);
+    }
   }
   return fallback;
 }
