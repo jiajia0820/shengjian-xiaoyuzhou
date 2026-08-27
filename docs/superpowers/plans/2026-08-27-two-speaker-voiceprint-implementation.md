@@ -47,7 +47,7 @@ class VoiceprintValidationTests(unittest.TestCase):
         refs = parse_voiceprint_references(json.dumps({
             "speaker_0": {"startMs": 0, "endMs": 10_000},
             "speaker_1": {"startMs": 20_000, "endMs": 50_000},
-        }), duration_ms=60_000)
+        }))
         self.assertEqual(refs, (
             VoiceprintReference("speaker_0", 0, 10_000),
             VoiceprintReference("speaker_1", 20_000, 50_000),
@@ -64,7 +64,8 @@ class VoiceprintValidationTests(unittest.TestCase):
         for value in cases:
             with self.subTest(value=value):
                 with self.assertRaisesRegex(VoiceprintInputError, "VOICEPRINT_REFERENCES_INVALID"):
-                    parse_voiceprint_references(json.dumps(value), duration_ms=60_000)
+                    refs = parse_voiceprint_references(json.dumps(value))
+                    validate_voiceprint_reference_bounds(refs, duration_ms=60_000)
 ```
 
 导入 `json`、`parse_voiceprint_references`、`VoiceprintInputError` 和 `VoiceprintReference`。测试只验证公开行为，不依赖模型。
@@ -93,7 +94,7 @@ class VoiceprintReference:
     end_ms: int
 ```
 
-在 `voiceprint.py` 定义 `MIN_REFERENCE_MS = 10_000`、`MAX_REFERENCE_MS = 30_000`，以及 `VoiceprintInputError`。`parse_voiceprint_references(value, duration_ms)` 必须：解析 JSON 对象；键集合恰好为 `speaker_0`、`speaker_1`；每个值只接受非负整数 `startMs`/`endMs`；持续时间在 10–30 秒；两段不重叠；结束时间不超过 `duration_ms`；任何失败都抛出 `VoiceprintInputError("VOICEPRINT_REFERENCES_INVALID")`，不能把原始 JSON、文件名或路径放进异常文本。
+在 `voiceprint.py` 定义 `MIN_REFERENCE_MS = 10_000`、`MAX_REFERENCE_MS = 30_000`，以及 `VoiceprintInputError`。`parse_voiceprint_references(value)` 只做结构校验：解析 JSON 对象；键集合恰好为 `speaker_0`、`speaker_1`；每个值只接受非负整数 `startMs`/`endMs`；持续时间在 10–30 秒；两段不重叠。另定义 `validate_voiceprint_reference_bounds(references, duration_ms)`，在 `ffprobe` 得到实际时长后检查结束时间不超过音频时长。两类失败都抛出 `VoiceprintInputError("VOICEPRINT_REFERENCES_INVALID")`，不能把原始 JSON、文件名或路径放进异常文本。
 
 - [ ] **Step 4: 运行 GREEN 并提交**
 
@@ -297,7 +298,7 @@ Expected: `JobManager` 不接受模式/参考参数，FastAPI 不解析新字段
 
 扩展 `Job`/`JobSnapshot` 的 `mode` 和可选 `references`，`create_job` 保持旧的 `create_job(expected_speakers)` 调用兼容，同时接受关键字 `mode`、`references`。`run` 在 `mode == "voiceprint"` 时调用 `voiceprint_engine.identify(source_path, references, on_progress)`，普通模式仍调用 `engine.diarize`；两种引擎的模型错误原样保留安全错误码，通用异常分别归一化为 `VOICEPRINT_FAILED`/`DIARIZATION_FAILED`。
 
-`main.py` 增加 `_parse_mode` 和 multipart `references` 字段：模式默认为 `diarization`，声纹模式先用 `parse_voiceprint_references` 做结构校验，写入文件后在 `validate_audio_file` 得到实际时长，再做范围校验；任何失败都先 discard 任务目录。响应 payload 增加 `mode`，区间结构不变。生产 `create_app` 同时创建两个引擎；健康接口保留 `model`/`device`，增加 `voiceprintModel`/`voiceprintDevice` 两个安全枚举字段。
+`main.py` 增加 `_parse_mode` 和 multipart `references` 字段：模式默认为 `diarization`，声纹模式先用 `parse_voiceprint_references` 做结构校验，写入文件后在 `validate_audio_file` 得到实际时长，再调用 `validate_voiceprint_reference_bounds`；任何失败都先 discard 任务目录。响应 payload 增加 `mode`，区间结构不变。生产 `create_app` 同时创建两个引擎；健康接口保留 `model`/`device`，增加 `voiceprintModel`/`voiceprintDevice` 两个安全枚举字段。
 
 - [ ] **Step 4: 运行 GREEN 并提交**
 
