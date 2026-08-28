@@ -11,7 +11,7 @@ declare global { var __cleanupRouteDeps: Deps | undefined; }
 const exportsMap: Record<string, string> = {
   "@/lib/ai-settings": "readActiveAiConfiguration",
   "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,refundUsage,releaseAnalysisLease,touchCurrentDocument,touchCurrentDocumentIfHash",
-  "@/lib/documents": "deleteDocument,documentKeys,putJson,putMarkdown,putMarkdownIfEtag,readMarkdown,readMarkdownWithEtag",
+  "@/lib/documents": "deleteDocument,documentKeys,putJson,putMarkdown,putMarkdownIfEtag,readJson,readMarkdown,readMarkdownWithEtag",
   "@/lib/security": "sha256Hex",
   "@/lib/transcript-cleanup-ai": "runTranscriptCleanup",
   "@/lib/transcript-cleanup": "parseCleanupDocument",
@@ -42,18 +42,23 @@ const baseDeps = () => {
   const deps: Deps = {
     "@/lib/user": { HttpError: TestHttpError, requireApiUser: async () => ({ userId: "u1" }), apiError: (error: ErrorLike) => Response.json({ error: error.code ?? "INTERNAL_ERROR", message: error.message }, { status: error.status ?? 500 }) },
     "@/lib/db": { getEpisodeRecord: async () => ({ ...episode }), consumeUsage: async () => true, refundUsage: async () => undefined, acquireAnalysisLease: async () => "lease", releaseAnalysisLease: async () => undefined, touchCurrentDocument: async (_u: string, _e: string, h: string) => { touched = h; }, touchCurrentDocumentIfHash: async (_u: string, _e: string, expected: string, next: string) => { if (expected !== episode.content_hash) return false; touched = next; return true; } },
-    "@/lib/documents": { documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json", aiCleanupSnapshotKey: "snapshot.json" }), readMarkdown: async (key: string) => { assert.equal(key, "current.md"); return current; }, readMarkdownWithEtag: async () => ({ markdown: current, etag: "etag-1" }), putJson: async (key: string, value: unknown) => { putCalls.push({ kind: "json", key, value }); }, putMarkdown: async (key: string, value: string) => { putCalls.push({ kind: "markdown", key, value }); current = value; }, putMarkdownIfEtag: async (key: string, value: string) => { await (deps["@/lib/documents"].putMarkdown as (k: string, v: string) => Promise<void>)(key, value); return `etag-${putCalls.length}`; }, deleteDocument: async (key: string) => { putCalls.push({ kind: "delete", key, value: undefined }); } },
+    "@/lib/documents": { documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json", aiCleanupSnapshotKey: "snapshot.json" }), readJson: async () => { throw new TestHttpError(404, "DOCUMENT_NOT_FOUND", "missing"); }, readMarkdown: async (key: string) => { assert.equal(key, "current.md"); return current; }, readMarkdownWithEtag: async () => ({ markdown: current, etag: "etag-1" }), putJson: async (key: string, value: unknown) => { putCalls.push({ kind: "json", key, value }); }, putMarkdown: async (key: string, value: string) => { putCalls.push({ kind: "markdown", key, value }); current = value; }, putMarkdownIfEtag: async (key: string, value: string) => { await (deps["@/lib/documents"].putMarkdown as (k: string, v: string) => Promise<void>)(key, value); return `etag-${putCalls.length}`; }, deleteDocument: async (key: string) => { putCalls.push({ kind: "delete", key, value: undefined }); } },
     "@/lib/security": { sha256Hex: async (value: string) => hash(value) },
     "@/lib/ai-settings": { readActiveAiConfiguration: async () => ({ provider: "custom", model: "test-model", apiKey: "secret", baseUrl: "https://secret.example", apiFormat: "responses", reasoningEffort: null }) },
     "@/lib/transcript-cleanup-ai": { runTranscriptCleanup: async ({ markdown, onProgress }: { markdown: string; onProgress?: (progress: { stage: string }) => void }) => { await onProgress?.({ stage: "parsing" }); const cleaned = markdown.replace("嗯嗯 ", ""); return { markdown: cleaned, document: { blocks: [{ id: "b1" }] }, sourceDocument: { blocks: [{ id: "b1" }] }, stats: { processedBlocks: 1, changedBlocks: cleaned === markdown ? 0 : 1, fillerRemoved: 1, repetitionsMerged: 0, typosFixed: 0, punctuationAdjusted: 0, unprocessedBlocks: 0 }, failedBatchCount: 0, rejectedIds: [], provider: "custom", model: "test-model" }; } },
     "@/lib/transcript-cleanup": { parseCleanupDocument: (markdown: string) => ({ blocks: markdown ? [{ id: "b1" }] : [] }) },
   };
-  return { deps, putCalls, get current() { return current; }, get touched() { return touched; } };
+  return { deps, putCalls, get current() { return current; }, set current(value: string) { current = value; }, get touched() { return touched; } };
 };
 
 async function loadRoute(deps: Deps) {
   globalThis.__cleanupRouteDeps = deps;
   return import(`${new URL("../app/api/episodes/[eid]/cleanup/route.ts", import.meta.url).href}?t=${crypto.randomUUID()}`);
+}
+
+async function loadUndoRoute(deps: Deps) {
+  globalThis.__cleanupRouteDeps = deps;
+  return import(`${new URL("../app/api/episodes/[eid]/cleanup/undo/route.ts", import.meta.url).href}?t=${crypto.randomUUID()}`);
 }
 
 test.afterEach(() => { globalThis.__cleanupRouteDeps = undefined; });
@@ -290,4 +295,131 @@ test("release failure does not change successful cleanup response", async () => 
   const route = await loadRoute(setup.deps);
   const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
   assert.equal(response.status, 200); assert.equal(releases, 1);
+});
+
+test("undo restores before Markdown and deletes snapshot", async () => {
+  const setup = baseDeps();
+  const cleanedMarkdown = "# 标题\n\n[00:00:01] 这是正文。\n";
+  const beforeHash = hash(beforeMarkdown);
+  const afterHash = hash(cleanedMarkdown);
+  setup.current = cleanedMarkdown;
+  let snapshot: unknown = { schemaVersion: 1, episodeId: "ep-1", beforeHash, afterHash, createdAt: new Date().toISOString(), beforeMarkdown, provider: "custom", model: "test-model", stats: {} };
+  setup.deps["@/lib/documents"].readJson = async () => JSON.stringify(snapshot);
+  const fakeEpisode = { ...episode, content_hash: afterHash };
+  setup.deps["@/lib/db"].getEpisodeRecord = async () => fakeEpisode;
+  setup.deps["@/lib/db"].touchCurrentDocumentIfHash = async (_u: string, _e: string, expected: string, next: string) => {
+    if (fakeEpisode.content_hash !== expected) return false;
+    fakeEpisode.content_hash = next;
+    return true;
+  };
+  setup.deps["@/lib/documents"].deleteDocument = async () => { snapshot = null; };
+  const route = await loadUndoRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: afterHash }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 200);
+  assert.equal(setup.current, beforeMarkdown);
+  assert.equal(fakeEpisode.content_hash, beforeHash);
+  assert.equal(snapshot, null);
+});
+
+test("undo refuses a manual edit", async () => {
+  const setup = baseDeps();
+  const cleanedMarkdown = "# 标题\n\n[00:00:01] 这是正文。\n";
+  const beforeHash = hash(beforeMarkdown);
+  const afterHash = hash(cleanedMarkdown);
+  setup.current = "用户的新编辑";
+  let snapshot: unknown = { schemaVersion: 1, episodeId: "ep-1", beforeHash, afterHash, createdAt: new Date().toISOString(), beforeMarkdown, provider: "custom", model: "test-model", stats: {} };
+  setup.deps["@/lib/documents"].readJson = async () => JSON.stringify(snapshot);
+  const fakeEpisode = { ...episode, content_hash: afterHash };
+  setup.deps["@/lib/db"].getEpisodeRecord = async () => fakeEpisode;
+  setup.deps["@/lib/documents"].deleteDocument = async () => { snapshot = null; };
+  const route = await loadUndoRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(setup.current) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 409);
+  assert.equal(setup.current, "用户的新编辑");
+  assert.notEqual(snapshot, null);
+});
+
+test("undo touch failure rolls DB hash back after conditional content restore", async () => {
+  const setup = baseDeps();
+  const cleanedMarkdown = "# 标题\n\n[00:00:01] 这是正文。\n";
+  const beforeHash = hash(beforeMarkdown);
+  const afterHash = hash(cleanedMarkdown);
+  setup.current = cleanedMarkdown;
+  let snapshot: unknown = { schemaVersion: 1, episodeId: "ep-1", beforeHash, afterHash, createdAt: new Date().toISOString(), beforeMarkdown, provider: "custom", model: "test-model", stats: {} };
+  setup.deps["@/lib/documents"].readJson = async () => JSON.stringify(snapshot);
+  const fakeEpisode = { ...episode, content_hash: afterHash };
+  setup.deps["@/lib/db"].getEpisodeRecord = async () => fakeEpisode;
+  let touchCalls = 0;
+  setup.deps["@/lib/db"].touchCurrentDocumentIfHash = async (_u: string, _e: string, expected: string, next: string) => {
+    touchCalls++;
+    if (touchCalls === 1) { fakeEpisode.content_hash = beforeHash; throw new Error("db state unknown"); }
+    if (fakeEpisode.content_hash !== expected) return false;
+    fakeEpisode.content_hash = next;
+    return true;
+  };
+  setup.deps["@/lib/documents"].deleteDocument = async () => { snapshot = null; };
+  const route = await loadUndoRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: afterHash }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 502);
+  assert.equal(setup.current, cleanedMarkdown);
+  assert.equal(fakeEpisode.content_hash, afterHash);
+  assert.notEqual(snapshot, null);
+});
+
+test("undo touch failure does not overwrite a concurrent object edit", async () => {
+  const setup = baseDeps();
+  const cleanedMarkdown = "# 标题\n\n[00:00:01] 这是正文。\n";
+  const beforeHash = hash(beforeMarkdown);
+  const afterHash = hash(cleanedMarkdown);
+  setup.current = cleanedMarkdown;
+  let snapshot: unknown = { schemaVersion: 1, episodeId: "ep-1", beforeHash, afterHash, createdAt: new Date().toISOString(), beforeMarkdown, provider: "custom", model: "test-model", stats: {} };
+  setup.deps["@/lib/documents"].readJson = async () => JSON.stringify(snapshot);
+  const fakeEpisode = { ...episode, content_hash: afterHash };
+  setup.deps["@/lib/db"].getEpisodeRecord = async () => fakeEpisode;
+  let touchCalls = 0;
+  setup.deps["@/lib/db"].touchCurrentDocumentIfHash = async () => {
+    touchCalls++;
+    fakeEpisode.content_hash = beforeHash;
+    throw new Error("db state unknown");
+  };
+  setup.deps["@/lib/documents"].putMarkdownIfEtag = async () => {
+    if (touchCalls === 0) { setup.current = beforeMarkdown; return "undo-etag"; }
+    setup.current = "并发编辑";
+    return null;
+  };
+  setup.deps["@/lib/documents"].deleteDocument = async () => { snapshot = null; };
+  const route = await loadUndoRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: afterHash }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 502);
+  assert.equal(setup.current, "并发编辑");
+  assert.notEqual(snapshot, null);
+});
+
+test("undo write exception after object commit reconciles DB hash", async () => {
+  const setup = baseDeps();
+  const cleanedMarkdown = "# 标题\n\n[00:00:01] 这是正文。\n";
+  const beforeHash = hash(beforeMarkdown);
+  const afterHash = hash(cleanedMarkdown);
+  setup.current = cleanedMarkdown;
+  let snapshot: unknown = { schemaVersion: 1, episodeId: "ep-1", beforeHash, afterHash, createdAt: new Date().toISOString(), beforeMarkdown, provider: "custom", model: "test-model", stats: {} };
+  setup.deps["@/lib/documents"].readJson = async () => JSON.stringify(snapshot);
+  const fakeEpisode = { ...episode, content_hash: afterHash };
+  setup.deps["@/lib/db"].getEpisodeRecord = async () => fakeEpisode;
+  setup.deps["@/lib/documents"].putMarkdownIfEtag = async () => {
+    setup.current = beforeMarkdown;
+    throw new Error("write committed then failed");
+  };
+  setup.deps["@/lib/documents"].readMarkdownWithEtag = async () => ({ markdown: setup.current, etag: "observed-before-etag" });
+  setup.deps["@/lib/db"].touchCurrentDocumentIfHash = async (_u: string, _e: string, expected: string, next: string) => {
+    if (fakeEpisode.content_hash !== expected) return false;
+    fakeEpisode.content_hash = next;
+    return true;
+  };
+  setup.deps["@/lib/documents"].deleteDocument = async () => { snapshot = null; };
+  const route = await loadUndoRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: afterHash }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 502);
+  assert.equal(setup.current, beforeMarkdown);
+  assert.equal(fakeEpisode.content_hash, beforeHash);
+  assert.notEqual(snapshot, null);
 });
