@@ -91,6 +91,11 @@ test("wires AI transcript cleanup controls and hash-protected requests", async (
   assert.match(workspace, /setMarkdown\(result\.markdown\)/);
   assert.match(workspace, /setCleanupStats\(result\.stats\)/);
   assert.match(workspace, /setCleanupUndoAvailable\(result\.undoAvailable/);
+  assert.match(workspace, /if \(!aiSettings\.defaultProvider\)/);
+  assert.match(workspace, /setAiModalOpen\(true\)/);
+  assert.match(workspace, /setCleanupProcessing\(true\);[\s\S]*cleanup\/undo/);
+  assert.match(workspace, /setCleanupProcessing\(false\)/);
+  assert.match(workspace, /cleanup refresh|best-effort|尽力刷新|刷新列表失败/);
   assert.match(workspace, /Accept["']?\s*:\s*["']text\/event-stream/);
   assert.match(workspace, /processedBlocks|processed/);
   assert.match(workspace, /changedBlocks|changed/);

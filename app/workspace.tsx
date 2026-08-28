@@ -363,6 +363,11 @@ export default function Workspace({
 
   async function cleanupTranscript() {
     if (!selected || cleanupProcessing) return;
+    if (!aiSettings.defaultProvider) {
+      setAiModalOpen(true);
+      setNotice({ kind: "info", text: "请先在 AI 设置中连接可用的 AI 服务" });
+      return;
+    }
     const episodeId = selected.eid;
     const sourceMarkdown = markdown;
     setCleanupProcessing(true);
@@ -382,10 +387,16 @@ export default function Workspace({
       setCleanupUndoAvailable(result.undoAvailable !== false);
       setSpeakerLayoutStale(Boolean(result.speakerLayoutStale));
       setEditorMode("preview");
-      await loadEpisodes();
+      try { await loadEpisodes(); } catch { /* 尽力刷新列表；不影响已成功的清理结果 */ }
       setNotice({ kind: "success", text: "AI 清理完成，已保留撤销快照" });
     } catch (error) {
-      setNotice({ kind: "error", text: error instanceof Error ? error.message : "AI 清理失败，当前文稿未改变" });
+      const message = error instanceof Error ? error.message : "AI 清理失败，当前文稿未改变";
+      if (message.includes("AI 设置") || message.includes("AI 服务")) {
+        setAiModalOpen(true);
+        setNotice({ kind: "info", text: message });
+      } else {
+        setNotice({ kind: "error", text: message });
+      }
     } finally {
       setCleanupProcessing(false);
     }
@@ -393,6 +404,8 @@ export default function Workspace({
 
   async function undoCleanup() {
     if (!selected || cleanupProcessing || !cleanupUndoAvailable) return;
+    setCleanupProcessing(true);
+    setCleanupProgress("正在撤销 AI 清理…");
     try {
       const currentHash = await sha256Hex(markdown);
       const response = await apiFetch(`/api/episodes/${selected.eid}/cleanup/undo`, {
@@ -411,10 +424,12 @@ export default function Workspace({
       setCleanupUndoAvailable(false);
       setSpeakerLayoutStale(false);
       setEditorMode("preview");
-      await loadEpisodes();
+      try { await loadEpisodes(); } catch { /* 尽力刷新列表；不影响已成功的撤销结果 */ }
       setNotice({ kind: "success", text: "已撤销 AI 清理，恢复清理前的编辑稿" });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "撤销 AI 清理失败" });
+    } finally {
+      setCleanupProcessing(false);
     }
   }
 
