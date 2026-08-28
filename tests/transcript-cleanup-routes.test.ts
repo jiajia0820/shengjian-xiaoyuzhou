@@ -215,3 +215,16 @@ test("CAS touch conflict returns stale error and never success", async () => {
   assert.equal(response.status, 409);
   assert.equal((await response.json() as { error: string }).error, "CLEANUP_STALE_HASH");
 });
+
+test("CAS conflict preserves cleaned current and snapshot evidence", async () => {
+  const setup = baseDeps();
+  let observedCurrent = beforeMarkdown;
+  setup.deps["@/lib/documents"].readMarkdown = async () => observedCurrent;
+  setup.deps["@/lib/documents"].putMarkdown = async (_key: string, value: string) => { observedCurrent = value; };
+  setup.deps["@/lib/db"].touchCurrentDocumentIfHash = async () => false;
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 409);
+  assert.notEqual(observedCurrent, beforeMarkdown);
+  assert.equal(setup.putCalls.some((call) => call.kind === "delete"), false);
+});

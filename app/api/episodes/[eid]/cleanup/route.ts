@@ -108,12 +108,7 @@ async function performCleanup(
       // Best-effort compensation across object storage and DB; never report success on failure.
       let currentRestored = !currentWriteStarted;
       let hashRestored = !currentWriteStarted;
-      if (currentWriteStarted) {
-        let canRestore = !casConflict;
-        if (casConflict) {
-          try { canRestore = (await sha256Hex(await readMarkdown(record.current_key))) === afterHash; } catch { canRestore = false; }
-        }
-        if (canRestore) {
+      if (currentWriteStarted && !casConflict) {
           try { await putMarkdown(record.current_key, markdown); currentRestored = true; } catch { /* retain snapshot for manual recovery */ }
           try {
             hashRestored = await touchCurrentDocumentIfHash(userId, eid, afterHash, beforeHash);
@@ -122,7 +117,6 @@ async function performCleanup(
               hashRestored = observed === beforeHash;
             }
           } catch { /* best effort */ }
-        }
       }
       if (snapshotWritten && currentRestored && hashRestored) {
         try { await deleteDocument(keys.aiCleanupSnapshotKey); } catch { /* retain snapshot for recovery */ }
