@@ -5,6 +5,7 @@ import test from "node:test";
 
 type Deps = Record<string, Record<string, unknown>>;
 type ErrorLike = { code?: string; message?: string; status?: number };
+class TestHttpError extends Error { status: number; code: string; constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; } }
 declare global { var __cleanupRouteDeps: Deps | undefined; }
 
 const exportsMap: Record<string, string> = {
@@ -17,8 +18,12 @@ const exportsMap: Record<string, string> = {
 };
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    if (specifier === "cloudflare:workers") return { shortCircuit: true, url: "data:text/javascript,export const env = {};" };
     const names = exportsMap[specifier];
-    if (!names || !globalThis.__cleanupRouteDeps) return nextResolve(specifier, context);
+    if (!names || !globalThis.__cleanupRouteDeps) {
+      if (specifier.startsWith(".") && !/\.[cm]?[jt]sx?$/.test(specifier)) return nextResolve(`${specifier}.ts`, context);
+      return nextResolve(specifier, context);
+    }
     const source = names.split(",").map((name) => name === "HttpError"
       ? `export const HttpError = globalThis.__cleanupRouteDeps[${JSON.stringify(specifier)}].HttpError;`
       : `export const ${name} = (...args) => globalThis.__cleanupRouteDeps[${JSON.stringify(specifier)}][${JSON.stringify(name)}](...args);`).join("\n");
@@ -34,7 +39,7 @@ const baseDeps = () => {
   let current = beforeMarkdown;
   let touched = "";
   const deps: Deps = {
-    "@/lib/user": { HttpError: class HttpError extends Error { status: number; code: string; constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; } }, requireApiUser: async () => ({ userId: "u1" }), apiError: (error: ErrorLike) => Response.json({ error: error.code ?? "INTERNAL_ERROR", message: error.message }, { status: error.status ?? 500 }) },
+    "@/lib/user": { HttpError: TestHttpError, requireApiUser: async () => ({ userId: "u1" }), apiError: (error: ErrorLike) => Response.json({ error: error.code ?? "INTERNAL_ERROR", message: error.message }, { status: error.status ?? 500 }) },
     "@/lib/db": { getEpisodeRecord: async () => ({ ...episode, content_hash: hash(current) }), consumeUsage: async () => true, refundUsage: async () => undefined, acquireAnalysisLease: async () => "lease", releaseAnalysisLease: async () => undefined, touchCurrentDocument: async (_u: string, _e: string, h: string) => { touched = h; } },
     "@/lib/documents": { documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json", aiCleanupSnapshotKey: "snapshot.json" }), readMarkdown: async (key: string) => { assert.equal(key, "current.md"); return current; }, putJson: async (key: string, value: unknown) => { putCalls.push({ kind: "json", key, value }); }, putMarkdown: async (key: string, value: string) => { putCalls.push({ kind: "markdown", key, value }); current = value; } },
     "@/lib/security": { sha256Hex: async (value: string) => hash(value) },
@@ -100,4 +105,19 @@ test("SSE fallback emits progress and complete without secrets", async () => {
   assert.match(body, /progress/);
   assert.match(body, /complete/);
   assert.doesNotMatch(body, /secret|secret\.example/);
+});
+
+test("authentication and configuration failures are sanitized", async () => {
+  const setup = baseDeps();
+  const HttpError = setup.deps["@/lib/user"].HttpError as typeof TestHttpError;
+  setup.deps["@/lib/user"].requireApiUser = async () => { throw new HttpError(401, "AUTH_REQUIRED", "请先登录"); };
+  const route = await loadRoute(setup.deps);
+  let response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 401);
+  setup.deps["@/lib/user"].requireApiUser = async () => ({ userId: "u1" });
+  setup.deps["@/lib/ai-settings"].readActiveAiConfiguration = async () => { throw new Error("provider secret-api-key"); };
+  response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  const body = await response.text();
+  assert.equal(response.status, 502);
+  assert.doesNotMatch(body, /secret-api-key/);
 });
