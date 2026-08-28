@@ -7,7 +7,7 @@ import {
   releaseAnalysisLease,
   touchCurrentDocument,
 } from "@/lib/db";
-import { documentKeys, putJson, putMarkdown, readMarkdown } from "@/lib/documents";
+import { deleteDocument, documentKeys, putJson, putMarkdown, readMarkdown } from "@/lib/documents";
 import { sha256Hex } from "@/lib/security";
 import { runTranscriptCleanup, type CleanupProgress, type TranscriptCleanupResult } from "@/lib/transcript-cleanup-ai";
 import { apiError, HttpError, requireApiUser } from "@/lib/user";
@@ -34,9 +34,15 @@ async function performCleanup(
   currentHash: string,
   onProgress?: (progress: CleanupProgress) => void,
 ): Promise<CleanupPayload> {
+  if (!/^[A-Za-z0-9_-]{1,180}$/.test(eid)) {
+    throw new HttpError(400, "INVALID_EPISODE_ID", "文稿标识无效");
+  }
+  const keys = await documentKeys(userId, eid);
   const record = await getEpisodeRecord(userId, eid);
   if (!record) throw new HttpError(404, "EPISODE_NOT_FOUND", "没有找到这篇文稿");
-  const keys = await documentKeys(userId, eid);
+  if (record.current_key !== keys.currentKey) {
+    throw new HttpError(409, "CLEANUP_DOCUMENT_KEY_MISMATCH", "当前文稿存储位置无效，请刷新后重试");
+  }
   const markdown = await readMarkdown(record.current_key);
   const beforeHash = await sha256Hex(markdown);
   if (beforeHash !== currentHash || (record.content_hash && record.content_hash !== beforeHash)) {
@@ -84,12 +90,24 @@ async function performCleanup(
       model: result.model,
       stats: result.stats,
     };
+    let snapshotWritten = false;
+    let currentWriteStarted = false;
     try {
       onProgress?.({ stage: "saving" });
       await putJson(keys.aiCleanupSnapshotKey, snapshot);
+      snapshotWritten = true;
+      currentWriteStarted = true;
       await putMarkdown(record.current_key, result.markdown);
       await touchCurrentDocument(userId, eid, afterHash);
     } catch (error) {
+      // Best-effort compensation across object storage and DB; never report success on failure.
+      if (currentWriteStarted) {
+        try { await putMarkdown(record.current_key, markdown); } catch { /* retain snapshot for manual recovery */ }
+        try { await touchCurrentDocument(userId, eid, beforeHash); } catch { /* best effort */ }
+      }
+      if (snapshotWritten) {
+        try { await deleteDocument(keys.aiCleanupSnapshotKey); } catch { /* retain snapshot for recovery */ }
+      }
       await refundUsage(userId, "ai");
       throw safeError(error);
     }
@@ -112,7 +130,6 @@ async function performCleanup(
 
 export async function POST(request: Request, context: Context) {
   const wantsSse = request.headers.get("accept")?.includes("text/event-stream") ?? false;
-  const events: unknown[] = [];
   try {
     const user = await requireApiUser({ mutation: true });
     const { eid } = await context.params;
@@ -122,22 +139,28 @@ export async function POST(request: Request, context: Context) {
       throw new HttpError(400, "INVALID_CLEANUP_REQUEST", "currentHash 必须是有效的 SHA-256");
     }
     const requestedHash = ((body as Record<string, unknown>).currentHash as string).toLowerCase();
-    const result = await performCleanup(user.userId, eid, requestedHash, (progress) => {
-      if (wantsSse) events.push({ type: "progress", ...progress });
-    });
     if (wantsSse) {
-      events.push({ type: "complete", result });
-      const stream = new ReadableStream({ start(controller) { const encoder = new TextEncoder(); for (const event of events) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)); controller.close(); } });
+      const stream = new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder();
+          const send = (event: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          void (async () => {
+            try {
+              const result = await performCleanup(user.userId, eid, requestedHash, (progress) => send({ type: "progress", ...progress }));
+              send({ type: "complete", result });
+            } catch (error) {
+              const safe = safeError(error);
+              send({ type: "error", error: safe.code, message: safe.message });
+            } finally { controller.close(); }
+          })();
+        },
+      });
       return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" } });
     }
+    const result = await performCleanup(user.userId, eid, requestedHash);
     return Response.json(result);
   } catch (error) {
     const safe = safeError(error);
-    if (wantsSse) {
-      events.push({ type: "error", error: safe.code, message: safe.message });
-      const stream = new ReadableStream({ start(controller) { const encoder = new TextEncoder(); for (const event of events) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)); controller.close(); } });
-      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream; charset=utf-8" } });
-    }
     return apiError(safe);
   }
 }

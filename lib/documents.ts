@@ -31,6 +31,10 @@ export async function putJson(key: string, value: unknown): Promise<void> {
   });
 }
 
+export async function deleteDocument(key: string): Promise<void> {
+  await getRuntimeEnv().DOCUMENTS.delete(key);
+}
+
 export async function readMarkdown(key: string): Promise<string> {
   const object = await getRuntimeEnv().DOCUMENTS.get(key);
   if (!object) throw new HttpError(404, "DOCUMENT_NOT_FOUND", "文稿文件不存在");

@@ -11,7 +11,7 @@ declare global { var __cleanupRouteDeps: Deps | undefined; }
 const exportsMap: Record<string, string> = {
   "@/lib/ai-settings": "readActiveAiConfiguration",
   "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,refundUsage,releaseAnalysisLease,touchCurrentDocument",
-  "@/lib/documents": "documentKeys,putJson,putMarkdown,readMarkdown",
+  "@/lib/documents": "deleteDocument,documentKeys,putJson,putMarkdown,readMarkdown",
   "@/lib/security": "sha256Hex",
   "@/lib/transcript-cleanup-ai": "runTranscriptCleanup",
   "@/lib/user": "apiError,HttpError,requireApiUser",
@@ -41,7 +41,7 @@ const baseDeps = () => {
   const deps: Deps = {
     "@/lib/user": { HttpError: TestHttpError, requireApiUser: async () => ({ userId: "u1" }), apiError: (error: ErrorLike) => Response.json({ error: error.code ?? "INTERNAL_ERROR", message: error.message }, { status: error.status ?? 500 }) },
     "@/lib/db": { getEpisodeRecord: async () => ({ ...episode, content_hash: hash(current) }), consumeUsage: async () => true, refundUsage: async () => undefined, acquireAnalysisLease: async () => "lease", releaseAnalysisLease: async () => undefined, touchCurrentDocument: async (_u: string, _e: string, h: string) => { touched = h; } },
-    "@/lib/documents": { documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json", aiCleanupSnapshotKey: "snapshot.json" }), readMarkdown: async (key: string) => { assert.equal(key, "current.md"); return current; }, putJson: async (key: string, value: unknown) => { putCalls.push({ kind: "json", key, value }); }, putMarkdown: async (key: string, value: string) => { putCalls.push({ kind: "markdown", key, value }); current = value; } },
+    "@/lib/documents": { documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json", aiCleanupSnapshotKey: "snapshot.json" }), readMarkdown: async (key: string) => { assert.equal(key, "current.md"); return current; }, putJson: async (key: string, value: unknown) => { putCalls.push({ kind: "json", key, value }); }, putMarkdown: async (key: string, value: string) => { putCalls.push({ kind: "markdown", key, value }); current = value; }, deleteDocument: async (key: string) => { putCalls.push({ kind: "delete", key, value: undefined }); } },
     "@/lib/security": { sha256Hex: async (value: string) => hash(value) },
     "@/lib/ai-settings": { readActiveAiConfiguration: async () => ({ provider: "custom", model: "test-model", apiKey: "secret", baseUrl: "https://secret.example", apiFormat: "responses", reasoningEffort: null }) },
     "@/lib/transcript-cleanup-ai": { runTranscriptCleanup: async ({ markdown, onProgress }: { markdown: string; onProgress?: (progress: { stage: string }) => void }) => { await onProgress?.({ stage: "parsing" }); const cleaned = markdown.replace("嗯嗯 ", ""); return { markdown: cleaned, document: { blocks: [{ id: "b1" }] }, sourceDocument: { blocks: [{ id: "b1" }] }, stats: { processedBlocks: 1, changedBlocks: cleaned === markdown ? 0 : 1, fillerRemoved: 1, repetitionsMerged: 0, typosFixed: 0, punctuationAdjusted: 0, unprocessedBlocks: 0 }, failedBatchCount: 0, rejectedIds: [], provider: "custom", model: "test-model" }; } },
@@ -53,6 +53,8 @@ async function loadRoute(deps: Deps) {
   globalThis.__cleanupRouteDeps = deps;
   return import(`${new URL("../app/api/episodes/[eid]/cleanup/route.ts", import.meta.url).href}?t=${crypto.randomUUID()}`);
 }
+
+test.afterEach(() => { globalThis.__cleanupRouteDeps = undefined; });
 
 test("stale current hash returns 409 without writes", async () => {
   const setup = baseDeps();
@@ -120,4 +122,69 @@ test("authentication and configuration failures are sanitized", async () => {
   const body = await response.text();
   assert.equal(response.status, 502);
   assert.doesNotMatch(body, /secret-api-key/);
+});
+
+test("current write failure compensates snapshot and refunds", async () => {
+  const setup = baseDeps();
+  let refunds = 0;
+  setup.deps["@/lib/db"].refundUsage = async () => { refunds++; };
+  let firstWrite = true;
+  setup.deps["@/lib/documents"].putMarkdown = async () => {
+    if (firstWrite) { firstWrite = false; throw new Error("write failed"); }
+  };
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 502);
+  assert.equal(refunds, 1);
+  assert.equal(setup.touched, hash(beforeMarkdown));
+  assert.ok(setup.putCalls.some((call) => call.kind === "delete" && call.key === "snapshot.json"));
+});
+
+test("touch failure restores current markdown and hash", async () => {
+  const setup = baseDeps();
+  let touchCalls = 0;
+  setup.deps["@/lib/db"].touchCurrentDocument = async (_u: string, _e: string, h: string) => {
+    touchCalls++;
+    if (touchCalls === 1) throw new Error("db failed");
+    assert.equal(h, hash(beforeMarkdown));
+  };
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 502);
+  assert.equal(touchCalls, 2);
+  assert.equal(setup.current, beforeMarkdown);
+  assert.ok(setup.putCalls.some((call) => call.kind === "delete" && call.key === "snapshot.json"));
+});
+
+test("SSE starts streaming progress before model completion", async () => {
+  const setup = baseDeps();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  setup.deps["@/lib/transcript-cleanup-ai"].runTranscriptCleanup = async ({ onProgress }: { onProgress?: (progress: { stage: string }) => void }) => {
+    onProgress?.({ stage: "parsing" });
+    await pending;
+    return { markdown: beforeMarkdown, document: { blocks: [{ id: "b1" }] }, sourceDocument: { blocks: [{ id: "b1" }] }, stats: { processedBlocks: 1, changedBlocks: 0, fillerRemoved: 0, repetitionsMerged: 0, typosFixed: 0, punctuationAdjusted: 0, unprocessedBlocks: 0 }, failedBatchCount: 0, rejectedIds: [], provider: "custom", model: "test-model" };
+  };
+  const route = await loadRoute(setup.deps);
+  const responsePromise = route.POST(new Request("https://app.test", { method: "POST", headers: { Accept: "text/event-stream" }, body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  const response = await responsePromise;
+  const reader = response.body!.getReader();
+  const first = await Promise.race([reader.read(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("no progress")), 200))]);
+  assert.match(new TextDecoder().decode(first.value), /"type":"progress"/);
+  release();
+  while (!(await reader.read()).done) { /* drain completion */ }
+});
+
+test("rejects unsafe episode ids and mismatched current keys without writes", async () => {
+  const setup = baseDeps();
+  let reads = 0;
+  setup.deps["@/lib/db"].getEpisodeRecord = async () => { reads++; return episode; };
+  const route = await loadRoute(setup.deps);
+  let response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "../bad" }) });
+  assert.equal(response.status, 400);
+  assert.equal(reads, 0);
+  setup.deps["@/lib/db"].getEpisodeRecord = async () => ({ ...episode, current_key: "other.md" });
+  response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 409);
+  assert.equal(setup.putCalls.length, 0);
 });
