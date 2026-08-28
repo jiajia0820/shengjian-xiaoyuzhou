@@ -14,6 +14,7 @@ const exportsMap: Record<string, string> = {
   "@/lib/documents": "deleteDocument,documentKeys,putJson,putMarkdown,readMarkdown",
   "@/lib/security": "sha256Hex",
   "@/lib/transcript-cleanup-ai": "runTranscriptCleanup",
+  "@/lib/transcript-cleanup": "parseCleanupDocument",
   "@/lib/user": "apiError,HttpError,requireApiUser",
 };
 registerHooks({
@@ -45,6 +46,7 @@ const baseDeps = () => {
     "@/lib/security": { sha256Hex: async (value: string) => hash(value) },
     "@/lib/ai-settings": { readActiveAiConfiguration: async () => ({ provider: "custom", model: "test-model", apiKey: "secret", baseUrl: "https://secret.example", apiFormat: "responses", reasoningEffort: null }) },
     "@/lib/transcript-cleanup-ai": { runTranscriptCleanup: async ({ markdown, onProgress }: { markdown: string; onProgress?: (progress: { stage: string }) => void }) => { await onProgress?.({ stage: "parsing" }); const cleaned = markdown.replace("嗯嗯 ", ""); return { markdown: cleaned, document: { blocks: [{ id: "b1" }] }, sourceDocument: { blocks: [{ id: "b1" }] }, stats: { processedBlocks: 1, changedBlocks: cleaned === markdown ? 0 : 1, fillerRemoved: 1, repetitionsMerged: 0, typosFixed: 0, punctuationAdjusted: 0, unprocessedBlocks: 0 }, failedBatchCount: 0, rejectedIds: [], provider: "custom", model: "test-model" }; } },
+    "@/lib/transcript-cleanup": { parseCleanupDocument: (markdown: string) => ({ blocks: markdown ? [{ id: "b1" }] : [] }) },
   };
   return { deps, putCalls, get current() { return current; }, get touched() { return touched; } };
 };
@@ -227,4 +229,38 @@ test("CAS conflict preserves cleaned current and snapshot evidence", async () =>
   assert.equal(response.status, 409);
   assert.notEqual(observedCurrent, beforeMarkdown);
   assert.equal(setup.putCalls.some((call) => call.kind === "delete"), false);
+});
+
+test("rejects oversized documents before quota or lease", async () => {
+  for (const oversized of ["x".repeat(5_000_001), Array.from({ length: 400_001 }, () => "😀").join("")]) {
+    const setup = baseDeps();
+    setup.deps["@/lib/documents"].readMarkdown = async () => oversized;
+    let consumed = 0; let leased = 0;
+    setup.deps["@/lib/db"].consumeUsage = async () => { consumed++; return true; };
+    setup.deps["@/lib/db"].acquireAnalysisLease = async () => { leased++; return "lease"; };
+    const route = await loadRoute(setup.deps);
+    const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(oversized) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+    assert.equal(response.status, 413);
+    assert.equal(consumed, 0); assert.equal(leased, 0); assert.equal(setup.putCalls.length, 0);
+  }
+});
+
+test("returns clear 400 when cleanup document has no editable blocks", async () => {
+  const setup = baseDeps();
+  setup.deps["@/lib/transcript-cleanup"].parseCleanupDocument = () => ({ blocks: [] });
+  setup.deps["@/lib/transcript-cleanup-ai"].runTranscriptCleanup = async () => ({ markdown: beforeMarkdown, document: { blocks: [] }, sourceDocument: { blocks: [] }, stats: { processedBlocks: 0, changedBlocks: 0, fillerRemoved: 0, repetitionsMerged: 0, typosFixed: 0, punctuationAdjusted: 0, unprocessedBlocks: 0 }, failedBatchCount: 0, rejectedIds: [], provider: "custom", model: "test-model" });
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 400);
+  assert.equal(setup.putCalls.length, 0);
+});
+
+test("rejects oversized model result before writing", async () => {
+  const setup = baseDeps();
+  const huge = "x".repeat(5_000_001);
+  setup.deps["@/lib/transcript-cleanup-ai"].runTranscriptCleanup = async () => ({ markdown: huge, document: { blocks: [{ id: "b1" }] }, sourceDocument: { blocks: [{ id: "b1" }] }, stats: { processedBlocks: 1, changedBlocks: 1, fillerRemoved: 0, repetitionsMerged: 0, typosFixed: 0, punctuationAdjusted: 0, unprocessedBlocks: 0 }, failedBatchCount: 0, rejectedIds: [], provider: "custom", model: "test-model" });
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 413);
+  assert.equal(setup.putCalls.length, 0);
 });

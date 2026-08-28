@@ -10,6 +10,7 @@ import {
 import { deleteDocument, documentKeys, putJson, putMarkdown, readMarkdown } from "@/lib/documents";
 import { sha256Hex } from "@/lib/security";
 import { runTranscriptCleanup, type CleanupProgress, type TranscriptCleanupResult } from "@/lib/transcript-cleanup-ai";
+import { parseCleanupDocument } from "@/lib/transcript-cleanup";
 import { apiError, HttpError, requireApiUser } from "@/lib/user";
 
 type Context = { params: Promise<{ eid: string }> };
@@ -44,6 +45,12 @@ async function performCleanup(
     throw new HttpError(409, "CLEANUP_DOCUMENT_KEY_MISMATCH", "当前文稿存储位置无效，请刷新后重试");
   }
   const markdown = await readMarkdown(record.current_key);
+  if (new TextEncoder().encode(markdown).byteLength > 5_000_000 || Array.from(markdown).length > 400_000) {
+    throw new HttpError(413, "CLEANUP_DOCUMENT_TOO_LARGE", "文稿超过清理上限");
+  }
+  if (parseCleanupDocument(markdown).blocks.length === 0) {
+    throw new HttpError(400, "CLEANUP_NO_BLOCKS", "文稿没有可清理的段落");
+  }
   const beforeHash = await sha256Hex(markdown);
   if (beforeHash !== currentHash || (record.content_hash && record.content_hash !== beforeHash)) {
     throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已发生变化，请刷新后重试");
@@ -80,6 +87,10 @@ async function performCleanup(
       throw new HttpError(409, "CLEANUP_STALE_HASH", "处理期间当前文稿已发生变化，请刷新后重试");
     }
     const afterHash = await sha256Hex(result.markdown);
+    if (new TextEncoder().encode(result.markdown).byteLength > 5_000_000 || Array.from(result.markdown).length > 400_000) {
+      await refundUsage(userId, "ai");
+      throw new HttpError(413, "CLEANUP_DOCUMENT_TOO_LARGE", "清理结果超过文稿上限");
+    }
     const snapshot = {
       schemaVersion: 1,
       episodeId: eid,
