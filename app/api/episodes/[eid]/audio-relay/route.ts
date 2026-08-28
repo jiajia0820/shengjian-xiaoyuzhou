@@ -2,7 +2,7 @@ import { withFreshTokens } from "@/lib/connection";
 import { getEpisodeRecord } from "@/lib/db";
 import { consumeAudioRelayTicket } from "@/lib/audio-relay-ticket";
 import { getRuntimeEnv } from "@/lib/runtime";
-import { apiError, HttpError, requireApiUser } from "@/lib/user";
+import { apiError, HttpError } from "@/lib/user";
 import { fetchOfficialAudio, getOfficialEpisode, validateOfficialAudioUrl } from "@/lib/xiaoyuzhou";
 
 type Context = { params: Promise<{ eid: string }> };

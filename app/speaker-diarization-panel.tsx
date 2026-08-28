@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { apiFetch } from "@/lib/auth-client";
 import {
   cancelLocalSpeakerJob,
@@ -168,10 +168,10 @@ export function SpeakerDiarizationPanel({
     }
   }, [episode.eid, episode.durationSeconds, reportNotice, updatePhase]);
 
-  useEffect(() => {
-    if (!open) return;
+  function openPanel() {
+    setOpen(true);
     void fetchAudioSource();
-  }, [fetchAudioSource, open]);
+  }
 
   function updateReference(speakerId: ReferenceSpeakerId, field: "start" | "end", value: string) {
     setReferenceInputs((current) => ({
@@ -325,7 +325,7 @@ export function SpeakerDiarizationPanel({
     .filter(({ segment }) => showAll || segment.speakerNeedsReview) ?? [];
 
   return <>
-    <button type="button" disabled={disabled} onClick={() => setOpen(true)}>按单集官方音频识别说话人</button>
+    <button type="button" disabled={disabled} onClick={openPanel}>按单集官方音频识别说话人</button>
     {open && <div className="modal-backdrop speaker-diarization-backdrop">
       <section className="connect-modal speaker-diarization-modal" role="dialog" aria-modal="true" aria-labelledby="speaker-diarization-title">
         <button className="modal-close" type="button" disabled={disabled || busy} onClick={() => void close()} aria-label="关闭说话人识别">×</button>
