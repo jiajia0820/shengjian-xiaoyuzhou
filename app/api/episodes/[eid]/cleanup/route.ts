@@ -101,11 +101,13 @@ async function performCleanup(
       await touchCurrentDocument(userId, eid, afterHash);
     } catch (error) {
       // Best-effort compensation across object storage and DB; never report success on failure.
+      let currentRestored = !currentWriteStarted;
+      let hashRestored = !currentWriteStarted;
       if (currentWriteStarted) {
-        try { await putMarkdown(record.current_key, markdown); } catch { /* retain snapshot for manual recovery */ }
-        try { await touchCurrentDocument(userId, eid, beforeHash); } catch { /* best effort */ }
+        try { await putMarkdown(record.current_key, markdown); currentRestored = true; } catch { /* retain snapshot for manual recovery */ }
+        try { await touchCurrentDocument(userId, eid, beforeHash); hashRestored = true; } catch { /* best effort */ }
       }
-      if (snapshotWritten) {
+      if (snapshotWritten && currentRestored && hashRestored) {
         try { await deleteDocument(keys.aiCleanupSnapshotKey); } catch { /* retain snapshot for recovery */ }
       }
       await refundUsage(userId, "ai");

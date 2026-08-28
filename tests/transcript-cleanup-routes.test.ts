@@ -156,6 +156,15 @@ test("touch failure restores current markdown and hash", async () => {
   assert.ok(setup.putCalls.some((call) => call.kind === "delete" && call.key === "snapshot.json"));
 });
 
+test("failed compensation retains snapshot for recovery", async () => {
+  const setup = baseDeps();
+  setup.deps["@/lib/documents"].putMarkdown = async () => { throw new Error("storage unavailable"); };
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 502);
+  assert.equal(setup.putCalls.some((call) => call.kind === "delete"), false);
+});
+
 test("SSE starts streaming progress before model completion", async () => {
   const setup = baseDeps();
   let release!: () => void;
