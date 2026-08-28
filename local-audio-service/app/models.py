@@ -41,6 +41,8 @@ class JobSnapshot:
 class Job:
     id: str
     expected_speakers: int | None
+    source_urls: tuple[str, ...] | None = None
+    allowed_origins: frozenset[str] = field(default_factory=frozenset)
     mode: JobMode = "diarization"
     references: tuple[VoiceprintReference, VoiceprintReference] | None = None
     status: JobStatus = "queued"

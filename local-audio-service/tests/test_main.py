@@ -129,6 +129,35 @@ class LocalServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
         self.assertEqual(list(self.root.iterdir()), [])
 
+    def test_remote_job_requires_exactly_one_audio_source(self):
+        missing = self.client.post("/jobs", headers=self.headers(), data={})
+        both = self.client.post(
+            "/jobs",
+            headers=self.headers(),
+            files=self.audio_form(),
+            data={"sourceUrl": "https://media.xyzcdn.net/audio.m4a"},
+        )
+
+        self.assertEqual(missing.status_code, 422)
+        self.assertEqual(both.status_code, 422)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_remote_job_is_accepted_without_waiting_for_download(self):
+        with patch("app.main.validate_remote_audio_url", side_effect=lambda value, _origins: value), patch.object(self.manager, "start") as start:
+            response = self.client.post(
+                "/jobs",
+                headers=self.headers(),
+                data={
+                    "sourceUrl": "https://media.xyzcdn.net/audio.m4a",
+                    "fallbackUrl": "http://localhost:3000/api/episodes/e/audio-relay",
+                },
+            )
+
+        self.assertEqual(response.status_code, 202)
+        job_id = response.json()["jobId"]
+        start.assert_called_once_with(job_id)
+        self.assertTrue((self.root / job_id).exists())
+
     def test_allowed_upload_creates_only_its_own_job(self):
         with patch("app.main.validate_audio_file", return_value=2_000):
             response = self.client.post("/jobs", headers=self.headers(), files=self.audio_form(), data={"expectedSpeakers": "2"})

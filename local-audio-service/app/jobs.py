@@ -8,9 +8,11 @@ import math
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
+from .audio import AudioValidationError, download_remote_audio
 from .engine import DiarizationEngine, ModelSetupError, VoiceprintEngine
 from .engine import CHUNK_DURATION_MS
 from .models import DiarizationTurn, Job, JobMode, JobSnapshot, VoiceprintReference
+from .voiceprint import VoiceprintInputError, validate_voiceprint_reference_bounds
 
 
 class JobManager:
@@ -37,6 +39,8 @@ class JobManager:
         *,
         mode: JobMode = "diarization",
         references: tuple[VoiceprintReference, VoiceprintReference] | None = None,
+        source_urls: tuple[str, ...] | None = None,
+        allowed_origins: frozenset[str] = frozenset(),
     ) -> JobSnapshot:
         if mode not in {"diarization", "voiceprint"}:
             raise ValueError("JOB_MODE_INVALID")
@@ -44,6 +48,9 @@ class JobManager:
             raise ValueError("VOICEPRINT_REFERENCES_INVALID")
         if mode == "diarization":
             references = None
+        normalized_sources = tuple(url.strip() for url in (source_urls or ()) if isinstance(url, str) and url.strip())
+        if len(normalized_sources) > 2:
+            raise ValueError("AUDIO_SOURCE_INVALID")
         job_id = secrets.token_urlsafe(18)
         with self._lock:
             while job_id in self._jobs:
@@ -52,8 +59,10 @@ class JobManager:
             self._jobs[job_id] = Job(
                 id=job_id,
                 expected_speakers=expected_speakers,
+                source_urls=normalized_sources or None,
                 mode=mode,
                 references=references,
+                allowed_origins=allowed_origins,
             )
             return self.snapshot(job_id)
 
@@ -78,13 +87,13 @@ class JobManager:
             if job.cancel_event.is_set() or job.status == "cancelled":
                 job.finished_at = time.monotonic()
                 return
-            if job.status != "queued" or not job.source_path:
+            if job.status != "queued" or (not job.source_path and not job.source_urls):
                 raise ValueError("JOB_NOT_QUEUEABLE")
             job.status = "decoding"
             job.progress = 20
             job.chunk_count = max(1, math.ceil((job.duration_ms or CHUNK_DURATION_MS) / CHUNK_DURATION_MS))
             job.chunk_index = 0
-            source_path = Path(job.source_path)
+            source_path = Path(job.source_path) if job.source_path else None
 
         def on_progress(progress: int) -> None:
             with self._lock:
@@ -98,12 +107,47 @@ class JobManager:
                         )
 
         try:
+            if job.source_urls:
+                last_error: AudioValidationError | None = None
+                for source_url in job.source_urls:
+                    try:
+                        source_path, duration_ms = download_remote_audio(
+                            source_url,
+                            self._root / job_id,
+                            allowed_origins=job.allowed_origins,
+                            cancel_event=job.cancel_event,
+                        )
+                        with self._lock:
+                            current = self._jobs.get(job_id)
+                            if current is None or current.cancel_event.is_set() or current.status == "cancelled":
+                                source_path.unlink(missing_ok=True)
+                                if current:
+                                    current.finished_at = time.monotonic()
+                                return
+                            current.source_path = str(source_path)
+                            current.duration_ms = duration_ms
+                            current.chunk_count = max(1, math.ceil(duration_ms / CHUNK_DURATION_MS))
+                        break
+                    except AudioValidationError as error:
+                        last_error = error
+                        if error.code in {"AUDIO_TOO_LARGE", "AUDIO_TOO_LONG", "JOB_CANCELLED"}:
+                            break
+                if source_path is None:
+                    raise last_error or AudioValidationError("AUDIO_DOWNLOAD_FAILED")
+
             with self._lock:
                 if self._jobs[job_id].cancel_event.is_set() or self._jobs[job_id].status == "cancelled":
                     self._jobs[job_id].finished_at = time.monotonic()
                     return
                 self._jobs[job_id].status = "diarizing"
                 self._jobs[job_id].progress = 30
+            if source_path is None:
+                raise AudioValidationError("AUDIO_FILE_MISSING")
+            if job.mode == "voiceprint" and job.references is not None:
+                try:
+                    validate_voiceprint_reference_bounds(job.references, job.duration_ms or 0)
+                except VoiceprintInputError as error:
+                    raise ModelSetupError(error.code) from error
             if job.mode == "voiceprint":
                 if job.references is None:
                     raise ModelSetupError("VOICEPRINT_REFERENCES_INVALID")
@@ -121,6 +165,16 @@ class JobManager:
                 current.status = "ready"
                 current.progress = 100
                 current.finished_at = time.monotonic()
+        except AudioValidationError as error:
+            with self._lock:
+                current = self._jobs.get(job_id)
+                if current and current.status != "cancelled":
+                    if error.code == "JOB_CANCELLED":
+                        current.status = "cancelled"
+                    else:
+                        current.status = "failed"
+                        current.error_code = error.code
+                    current.finished_at = time.monotonic()
         except ModelSetupError as error:
             with self._lock:
                 current = self._jobs.get(job_id)
@@ -139,7 +193,7 @@ class JobManager:
     def start(self, job_id: str) -> None:
         with self._lock:
             job = self._job(job_id)
-            if job.status != "queued" or not job.source_path:
+            if job.status != "queued" or (not job.source_path and not job.source_urls):
                 raise ValueError("JOB_NOT_QUEUEABLE")
             if job_id not in self._futures:
                 self._futures[job_id] = self._executor.submit(self.run, job_id)

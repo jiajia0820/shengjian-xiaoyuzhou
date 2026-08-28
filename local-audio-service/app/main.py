@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from .audio import AudioValidationError, MAX_BYTES, SUPPORTED_SUFFIXES, validate_audio_file
+from .audio import AudioValidationError, MAX_BYTES, SUPPORTED_SUFFIXES, validate_audio_file, validate_remote_audio_url
 from .engine import PyannoteCommunityEngine, VoiceprintEngine
 from .jobs import JobManager
 from .models import JobSnapshot
@@ -176,7 +176,9 @@ def create_app(settings: ServiceSettings | None = None, manager: JobManager | No
     @app.post("/jobs", status_code=202, dependencies=[Depends(require_local_client)])
     async def create_job(
         request: Request,
-        audio: UploadFile = File(...),
+        audio: UploadFile | None = File(None),
+        sourceUrl: str | None = Form(None),
+        fallbackUrl: str | None = Form(None),
         expectedSpeakers: str | None = Form(None),
         mode: str | None = Form(None),
         references: str | None = Form(None),
@@ -184,6 +186,23 @@ def create_app(settings: ServiceSettings | None = None, manager: JobManager | No
         content_length = request.headers.get("content-length")
         if content_length and content_length.isdecimal() and int(content_length) > MAX_BYTES:
             raise HTTPException(status_code=413, detail="AUDIO_TOO_LARGE")
+
+        source_value = sourceUrl.strip() if isinstance(sourceUrl, str) else ""
+        fallback_value = fallbackUrl.strip() if isinstance(fallbackUrl, str) else ""
+        remote_values = [value for value in (source_value, fallback_value) if value]
+        if (audio is None) == (not source_value) or (fallback_value and not source_value):
+            raise HTTPException(status_code=422, detail="AUDIO_SOURCE_REQUIRED")
+        if audio is not None and remote_values:
+            raise HTTPException(status_code=422, detail="AUDIO_SOURCE_REQUIRED")
+        remote_sources: tuple[str, ...] | None = None
+        if source_value:
+            try:
+                remote_sources = tuple(dict.fromkeys(
+                    validate_remote_audio_url(value, active_settings.allowed_origins)
+                    for value in remote_values
+                ))
+            except AudioValidationError as error:
+                raise HTTPException(status_code=_error_status(error), detail=error.code) from error
 
         expected_speakers = _parse_expected_speakers(expectedSpeakers)
         parsed_mode = _parse_mode(mode)
@@ -193,19 +212,32 @@ def create_app(settings: ServiceSettings | None = None, manager: JobManager | No
                 parsed_references = parse_voiceprint_references(references)
             except VoiceprintInputError as error:
                 raise HTTPException(status_code=422, detail=error.code) from error
-        suffix = Path(audio.filename or "").suffix.lower()
-        if suffix not in SUPPORTED_SUFFIXES:
-            raise HTTPException(status_code=415, detail="AUDIO_TYPE_UNSUPPORTED")
-
         try:
             job = active_manager.create_job(
                 expected_speakers,
                 mode=parsed_mode,
                 references=parsed_references,
+                source_urls=remote_sources,
+                allowed_origins=active_settings.allowed_origins,
             )
         except ValueError as error:
-            code = str(error) if str(error) in {"JOB_MODE_INVALID", "VOICEPRINT_REFERENCES_INVALID"} else "AUDIO_PROCESSING_REJECTED"
+            code = str(error) if str(error) in {"JOB_MODE_INVALID", "VOICEPRINT_REFERENCES_INVALID", "AUDIO_SOURCE_INVALID"} else "AUDIO_PROCESSING_REJECTED"
             raise HTTPException(status_code=422, detail=code) from error
+        if remote_sources:
+            try:
+                active_manager.start(job.id)
+            except Exception:
+                active_manager.discard(job.id)
+                raise HTTPException(status_code=422, detail="AUDIO_PROCESSING_REJECTED")
+            return {"jobId": job.id, "status": "queued"}
+
+        if audio is None:
+            active_manager.discard(job.id)
+            raise HTTPException(status_code=422, detail="AUDIO_SOURCE_REQUIRED")
+        suffix = Path(audio.filename or "").suffix.lower()
+        if suffix not in SUPPORTED_SUFFIXES:
+            active_manager.discard(job.id)
+            raise HTTPException(status_code=415, detail="AUDIO_TYPE_UNSUPPORTED")
         source_path = active_manager.upload_path(job.id, suffix)
         written = 0
         try:
@@ -233,7 +265,8 @@ def create_app(settings: ServiceSettings | None = None, manager: JobManager | No
             active_manager.discard(job.id)
             raise HTTPException(status_code=422, detail="AUDIO_PROCESSING_REJECTED")
         finally:
-            await audio.close()
+            if audio is not None:
+                await audio.close()
 
         return {"jobId": job.id, "status": "queued"}
 

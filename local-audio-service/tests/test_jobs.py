@@ -5,12 +5,14 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.jobs import JobManager
 from app.engine import ModelSetupError
 from app.models import DiarizationTurn, VoiceprintReference
+from app.audio import AudioValidationError
 
 
 class FakeEngine:
@@ -53,6 +55,42 @@ class ChunkProgressEngine:
 
 
 class JobManagerTests(unittest.TestCase):
+    def test_remote_job_tries_direct_source_then_relay_before_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jobs = JobManager(root=root, engine=FakeEngine())
+            job = jobs.create_job(
+                expected_speakers=None,
+                source_urls=("https://media.xyzcdn.net/direct.m4a", "http://localhost:3000/relay"),
+            )
+            downloaded = root / job.id / "remote.m4a"
+            downloaded.write_bytes(b"audio")
+            with patch("app.jobs.download_remote_audio", side_effect=[
+                AudioValidationError("AUDIO_DOWNLOAD_FAILED"),
+                (downloaded, 2_000),
+            ]) as download:
+                jobs.start(job.id)
+                jobs.wait_for_idle(timeout=1)
+
+            self.assertEqual(download.call_count, 2)
+            self.assertEqual(download.call_args_list[0].args[0], "https://media.xyzcdn.net/direct.m4a")
+            self.assertEqual(download.call_args_list[1].args[0], "http://localhost:3000/relay")
+            self.assertEqual(jobs.snapshot(job.id).status, "ready")
+
+    def test_remote_job_failure_does_not_enter_model_or_publish_segments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            engine = FakeEngine()
+            jobs = JobManager(root=root, engine=engine)
+            job = jobs.create_job(expected_speakers=None, source_urls=("https://media.xyzcdn.net/direct.m4a",))
+            with patch("app.jobs.download_remote_audio", side_effect=AudioValidationError("AUDIO_DOWNLOAD_FAILED")):
+                jobs.run(job.id)
+
+            snapshot = jobs.snapshot(job.id)
+            self.assertEqual(snapshot.status, "failed")
+            self.assertEqual(snapshot.error_code, "AUDIO_DOWNLOAD_FAILED")
+            self.assertEqual(snapshot.segments, [])
+
     def test_voiceprint_job_dispatches_references_and_exposes_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
