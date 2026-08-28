@@ -34,6 +34,11 @@ export type LocalSpeakerJobOptions =
   | { mode?: "diarization"; expectedSpeakers: number | null }
   | { mode: "voiceprint"; references: VoiceprintReferences };
 
+export type RemoteSpeakerAudioSource = {
+  sourceUrl: string;
+  fallbackUrl?: string;
+};
+
 const configuredUrl = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_LOCAL_SPEAKER_URL?.trim() : "";
 // Keep the browser on the same loopback hostname as the dev site. Using
 // 127.0.0.1 from a localhost page triggers a private-network preflight in
@@ -51,6 +56,10 @@ export function localSpeakerErrorMessage(code: string | null): string {
     case "AUDIO_TOO_LONG": return "音频超过 2 小时，未开始处理";
     case "AUDIO_TYPE_UNSUPPORTED": return "该音频格式暂不支持";
     case "AUDIO_DECODE_FAILED": return "音频解码失败，请确认 FFmpeg 已安装并在 PATH 中";
+    case "AUDIO_DOWNLOAD_FAILED": return "官方音频下载失败，可重试";
+    case "AUDIO_HOST_NOT_ALLOWED": return "官方音频地址不在允许范围内，请重新获取";
+    case "AUDIO_REDIRECT_NOT_ALLOWED": return "官方音频跳转不安全，请重新获取";
+    case "AUDIO_RELAY_EXPIRED": return "官方音频中转地址已过期，请重新获取";
     case "JOB_NOT_FOUND": return "本地任务已过期或已被清理";
     case "DIARIZATION_FAILED": return "本地说话人识别失败，请检查音频和模型配置";
     case "VOICEPRINT_REFERENCES_INVALID": return "两段参考音频需各为 5–30 秒、位于音频内且不能重叠";
@@ -156,11 +165,20 @@ export async function createLocalSpeakerJob(
   options: LocalSpeakerJobOptions,
 ): Promise<{ jobId: string; status: "queued" }>;
 export async function createLocalSpeakerJob(
-  file: File,
+  source: RemoteSpeakerAudioSource,
+  options: LocalSpeakerJobOptions,
+): Promise<{ jobId: string; status: "queued" }>;
+export async function createLocalSpeakerJob(
+  source: File | RemoteSpeakerAudioSource,
   optionsOrExpected: number | null | LocalSpeakerJobOptions,
 ): Promise<{ jobId: string; status: "queued" }> {
   const form = new FormData();
-  form.append("audio", file);
+  if (!(source instanceof File) && typeof source === "object" && typeof source.sourceUrl === "string") {
+    form.append("sourceUrl", source.sourceUrl);
+    if (source.fallbackUrl) form.append("fallbackUrl", source.fallbackUrl);
+  } else {
+    form.append("audio", source as File);
+  }
   if (typeof optionsOrExpected === "number" || optionsOrExpected === null) {
     form.append("mode", "diarization");
     form.append("expectedSpeakers", optionsOrExpected === null ? "auto" : String(optionsOrExpected));

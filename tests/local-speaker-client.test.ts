@@ -93,6 +93,45 @@ test("翻译声纹任务错误码而不暴露服务端原文", () => {
   assert.match(localSpeakerErrorMessage("VOICEPRINT_FAILED"), /声纹/);
 });
 
+test("创建远程音频声纹任务只发送源地址和参考区间", async () => {
+  const previousFetch = globalThis.fetch;
+  let request: Request | undefined;
+  try {
+    globalThis.fetch = async (input, init) => {
+      request = new Request(input, init);
+      return Response.json({ jobId: "remote-job", status: "queued" }, { status: 202 });
+    };
+    await createLocalSpeakerJob(
+      { sourceUrl: "https://media.xyzcdn.net/a.m4a", fallbackUrl: "http://localhost:3000/api/episodes/e/audio-relay?ticket=t" },
+      {
+        mode: "voiceprint",
+        references: {
+          speaker_0: { startMs: 0, endMs: 10_000 },
+          speaker_1: { startMs: 20_000, endMs: 30_000 },
+        },
+      },
+    );
+
+    const form = await request?.formData();
+    assert.equal(form?.get("sourceUrl"), "https://media.xyzcdn.net/a.m4a");
+    assert.equal(form?.get("fallbackUrl"), "http://localhost:3000/api/episodes/e/audio-relay?ticket=t");
+    assert.equal(form?.get("mode"), "voiceprint");
+    assert.deepEqual(JSON.parse(String(form?.get("references"))), {
+      speaker_0: { startMs: 0, endMs: 10_000 },
+      speaker_1: { startMs: 20_000, endMs: 30_000 },
+    });
+    assert.equal(form?.has("audio"), false);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("远程音频下载错误映射为可重试中文提示", () => {
+  assert.match(localSpeakerErrorMessage("AUDIO_DOWNLOAD_FAILED"), /下载失败/);
+  assert.match(localSpeakerErrorMessage("AUDIO_HOST_NOT_ALLOWED"), /地址/);
+  assert.match(localSpeakerErrorMessage("AUDIO_REDIRECT_NOT_ALLOWED"), /跳转/);
+});
+
 test("本地服务只返回受限结构并将模型配置错误翻译为中文", async () => {
   const previousFetch = globalThis.fetch;
   try {
