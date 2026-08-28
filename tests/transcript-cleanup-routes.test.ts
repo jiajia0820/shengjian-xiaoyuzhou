@@ -87,6 +87,15 @@ test("all provider batch failures return 502 and do not write", async () => {
   assert.equal(setup.putCalls.length, 0);
 });
 
+test("all rejected blocks return 502 even when provider batches completed", async () => {
+  const setup = baseDeps();
+  setup.deps["@/lib/transcript-cleanup-ai"].runTranscriptCleanup = async () => ({ markdown: beforeMarkdown, document: { blocks: [{ id: "b1" }] }, sourceDocument: { blocks: [{ id: "b1" }] }, stats: { processedBlocks: 0, changedBlocks: 0, fillerRemoved: 0, repetitionsMerged: 0, typosFixed: 0, punctuationAdjusted: 0, unprocessedBlocks: 1 }, failedBatchCount: 0, rejectedIds: ["b1"], provider: "custom", model: "test-model" });
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 502);
+  assert.equal(setup.putCalls.length, 0);
+});
+
 test("quota exhaustion and lease conflict are safe errors", async () => {
   const setup = baseDeps();
   setup.deps["@/lib/db"].consumeUsage = async () => false;

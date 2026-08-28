@@ -75,8 +75,7 @@ export async function PUT(request: Request, context: Context) {
         labels,
       },
     };
-    try { leaseId = await acquireAnalysisLease(user.userId); }
-    catch (error) { if (!(error instanceof TypeError)) throw error; leaseId = "legacy-test-lease"; }
+    leaseId = await acquireAnalysisLease(user.userId);
     if (!leaseId) throw new HttpError(409, "ANALYSIS_ALREADY_RUNNING", "AI 任务正在运行，请完成后再保存说话人分段");
     leaseUserId = user.userId;
     await putJson(keys.transcriptKey, nextArtifact);

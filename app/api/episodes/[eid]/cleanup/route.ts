@@ -68,7 +68,8 @@ async function performCleanup(
     const blockCount = result.document.blocks.length;
     const allBlocksRejected = result.rejectedIds.length >= blockCount
       || result.stats.unprocessedBlocks >= blockCount;
-    if ((result.failedBatchCount > 0 && allBlocksRejected) || result.failedBatchCount >= blockCount) {
+    if ((blockCount > 0 && result.stats.processedBlocks === 0 && allBlocksRejected)
+      || result.failedBatchCount >= blockCount) {
       await refundUsage(userId, "ai");
       throw new HttpError(502, "CLEANUP_PROVIDER_FAILED", "AI 清理未能处理任何段落，请稍后重试");
     }

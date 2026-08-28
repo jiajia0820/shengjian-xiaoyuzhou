@@ -1667,10 +1667,12 @@ test("保存说话人分段时只使用服务器保存的官方正文", async ()
   let touchedHash = "";
   globalThis.__analysisGenerateRouteTestDeps = {
     "@/lib/db": {
+      acquireAnalysisLease: async () => "lease-id",
       getEpisodeRecord: async () => ({
         eid: "episode-id", original_key: "original.md", current_key: "current.md",
         original_hash: "original-hash", duration_seconds: 1,
       }),
+      releaseAnalysisLease: async () => undefined,
       touchCurrentDocument: async (_userId: string, _eid: string, hash: string) => { touchedHash = hash; },
     },
     "@/lib/documents": {
