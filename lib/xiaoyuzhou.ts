@@ -216,6 +216,35 @@ async function authenticatedRequest(path: string, tokens: XiaoyuzhouTokens, init
   return safeJson(response);
 }
 
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+export async function fetchOfficialAudio(input: string | URL, init: RequestInit = {}): Promise<Response> {
+  let current = validateOfficialAudioUrl(String(input));
+  const requestInit: RequestInit = { ...init, redirect: "manual" };
+  for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+    const response = await fetchUpstream(
+      current,
+      requestInit,
+      "AUDIO_DOWNLOAD_FAILED",
+      "官方音频下载服务暂时无法连接，请稍后重试",
+    );
+    if (!isRedirectStatus(response.status)) return response;
+    const location = response.headers.get("location");
+    if (response.body) await response.body.cancel();
+    if (!location || redirectCount === 3) {
+      throw new XiaoyuzhouError("AUDIO_REDIRECT_NOT_ALLOWED", "官方音频地址跳转次数过多，请重新获取音频");
+    }
+    try {
+      current = validateOfficialAudioUrl(new URL(location, current).toString());
+    } catch {
+      throw new XiaoyuzhouError("AUDIO_REDIRECT_NOT_ALLOWED", "官方音频地址跳转到不安全的主机");
+    }
+  }
+  throw new XiaoyuzhouError("AUDIO_REDIRECT_NOT_ALLOWED", "官方音频地址跳转次数过多，请重新获取音频");
+}
+
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
