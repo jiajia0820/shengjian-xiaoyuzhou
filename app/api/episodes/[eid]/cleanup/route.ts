@@ -7,7 +7,7 @@ import {
   releaseAnalysisLease,
   touchCurrentDocumentIfHash,
 } from "@/lib/db";
-import { deleteDocument, documentKeys, putJson, putMarkdown, putMarkdownIfEtag, readMarkdown, readMarkdownWithEtag } from "@/lib/documents";
+import { deleteDocument, documentKeys, putJson, putMarkdownIfEtag, readMarkdown, readMarkdownWithEtag } from "@/lib/documents";
 import { sha256Hex } from "@/lib/security";
 import { runTranscriptCleanup, type CleanupProgress, type TranscriptCleanupResult } from "@/lib/transcript-cleanup-ai";
 import { parseCleanupDocument } from "@/lib/transcript-cleanup";
@@ -119,13 +119,14 @@ async function performCleanup(
     let snapshotWritten = false;
     let currentWriteStarted = false;
     let currentWriteSucceeded = false;
+    let writtenEtag: string | null = null;
     let casConflict = false;
     try {
       onProgress?.({ stage: "saving" });
       await putJson(keys.aiCleanupSnapshotKey, snapshot);
       snapshotWritten = true;
       currentWriteStarted = true;
-      const writtenEtag = await putMarkdownIfEtag(record.current_key, result.markdown, currentObject.etag);
+      writtenEtag = await putMarkdownIfEtag(record.current_key, result.markdown, currentObject.etag);
       if (!writtenEtag) {
         casConflict = true;
         throw new HttpError(409, "CLEANUP_STALE_HASH", "处理期间当前文稿已发生变化，请刷新后重试");
@@ -139,8 +140,8 @@ async function performCleanup(
       // Best-effort compensation across object storage and DB; never report success on failure.
       let currentRestored = !currentWriteStarted;
       let hashRestored = !currentWriteStarted;
-      if (currentWriteSucceeded && !casConflict) {
-          try { await putMarkdown(record.current_key, markdown); currentRestored = true; } catch { /* retain snapshot for manual recovery */ }
+      if (currentWriteSucceeded && writtenEtag && !casConflict) {
+          try { currentRestored = Boolean(await putMarkdownIfEtag(record.current_key, markdown, writtenEtag)); } catch { /* retain snapshot for manual recovery */ }
           try {
             hashRestored = await touchCurrentDocumentIfHash(userId, eid, afterHash, beforeHash);
             if (!hashRestored) {
@@ -168,7 +169,7 @@ async function performCleanup(
       undoAvailable: true,
     };
   } finally {
-    await releaseAnalysisLease(userId, leaseId);
+    try { await releaseAnalysisLease(userId, leaseId); } catch { /* best effort */ }
   }
 }
 
