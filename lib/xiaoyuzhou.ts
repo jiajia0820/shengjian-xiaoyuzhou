@@ -21,6 +21,8 @@ export type OfficialEpisode = {
   durationSeconds: number | null;
   publishedAt: string | null;
   mediaId: string | null;
+  audioUrl: string | null;
+  audioMimeType: string | null;
 };
 
 export type TranscriptSegment = {
@@ -218,14 +220,38 @@ function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function isOfficialAudioHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return ["xyzcdn.net", "xiaoyuzhoufm.com"].some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+}
+
+export function validateOfficialAudioUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new XiaoyuzhouError("AUDIO_URL_INVALID", "小宇宙返回了不安全的官方音频地址");
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port || !url.hostname || !isOfficialAudioHost(url.hostname)) {
+    throw new XiaoyuzhouError("AUDIO_URL_INVALID", "小宇宙返回了不安全的官方音频地址");
+  }
+  return url.toString();
+}
+
 export async function getOfficialEpisode(eid: string, tokens: XiaoyuzhouTokens): Promise<OfficialEpisode> {
   const response = await authenticatedRequest(`/v1/episode/get?eid=${encodeURIComponent(eid)}`, tokens, { method: "GET" });
   const episode = objectValue(response.data);
   const episodeId = episode.eid || episode.id;
   const podcast = objectValue(episode.podcast);
   const media = objectValue(episode.media);
+  const mediaSource = objectValue(media.source);
+  const enclosure = objectValue(episode.enclosure);
   const transcript = objectValue(episode.transcript);
   const mediaId = episode.transcriptMediaId || transcript.mediaId || media.id;
+  const audioUrlCandidates = [mediaSource.url, media.url, enclosure.url, episode.audioUrl];
+  const audioUrl = audioUrlCandidates.find((value) => typeof value === "string" && value.trim()) as string | undefined;
+  const audioMimeCandidates = [media.mimeType, enclosure.type, episode.audioMimeType];
+  const audioMimeType = audioMimeCandidates.find((value) => typeof value === "string" && value.trim()) as string | undefined;
   if (!episodeId || !episode.title) throw new XiaoyuzhouError("EPISODE_NOT_FOUND", "没有找到这个小宇宙单集", 404);
   return {
     eid: String(episodeId),
@@ -235,6 +261,8 @@ export async function getOfficialEpisode(eid: string, tokens: XiaoyuzhouTokens):
     durationSeconds: Number.isFinite(Number(episode.duration)) ? Number(episode.duration) : null,
     publishedAt: typeof episode.pubDate === "string" ? episode.pubDate : null,
     mediaId: typeof mediaId === "string" && mediaId ? mediaId : null,
+    audioUrl: audioUrl?.trim() || null,
+    audioMimeType: audioMimeType?.trim() || null,
   };
 }
 

@@ -12,6 +12,7 @@ import {
   loginWithSms,
   parseEpisodeUrl,
   sendSmsCode,
+  validateOfficialAudioUrl,
   XiaoyuzhouError,
 } from "../lib/xiaoyuzhou.ts";
 import {
@@ -1416,10 +1417,90 @@ test("accepts the current Xiaoyuzhou episode response id field", async () => {
       durationSeconds: 2880,
       publishedAt: "2025-04-14T00:00:00.000Z",
       mediaId: "5fc12a24dee9c1e16dfa4090/li6_sY0Z2KSoJDqzOnBGHUdBIIsW.mp4a",
+      audioUrl: null,
+      audioMimeType: null,
     });
   } finally {
     globalThis.fetch = previousFetch;
   }
+});
+
+const officialAudioTestTokens = {
+  accessToken: "access-token",
+  refreshToken: "refresh-token",
+  deviceId: "device-id",
+};
+
+function officialEpisodeResponse(extra: Record<string, unknown> = {}) {
+  return Response.json({ data: {
+    id: "67fc60374d8edb5eb86d6026",
+    title: "测试单集",
+    podcast: { title: "测试节目" },
+    duration: 120,
+    transcript: { mediaId: "transcript.m4a" },
+    ...extra,
+  } });
+}
+
+test("extracts the official audio source from media source data", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({ data: {
+      id: "67fc60374d8edb5eb86d6026", title: "测试单集",
+      podcast: { title: "测试节目" }, duration: 120,
+      media: { id: "media.m4a", mimeType: "audio/mp4", source: {
+        url: "https://media.xyzcdn.net/test.m4a",
+      } }, transcript: { mediaId: "transcript.m4a" },
+    } });
+    const episode = await getOfficialEpisode("67fc60374d8edb5eb86d6026", officialAudioTestTokens);
+    assert.equal(episode.audioUrl, "https://media.xyzcdn.net/test.m4a");
+    assert.equal(episode.audioMimeType, "audio/mp4");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("falls back through official audio URL fields in a fixed order", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    const responses = [
+      officialEpisodeResponse({
+        media: { url: "https://media.xyzcdn.net/media-url.m4a", source: { url: "" } },
+        enclosure: { url: "https://media.xyzcdn.net/enclosure-url.m4a" },
+      }),
+      officialEpisodeResponse({
+        media: { source: { url: "" } },
+        enclosure: { url: "https://media.xyzcdn.net/enclosure-only.m4a", type: "audio/mp4" },
+      }),
+      officialEpisodeResponse({
+        media: { source: { url: "" } },
+        enclosure: { url: "" },
+        audioUrl: "https://media.xyzcdn.net/audio-field.m4a",
+        audioMimeType: "audio/mp4",
+      }),
+    ];
+    globalThis.fetch = async () => {
+      const response = responses.shift();
+      assert.ok(response, "测试响应数量必须与请求数量一致");
+      return response;
+    };
+    const first = await getOfficialEpisode("67fc60374d8edb5eb86d6026", officialAudioTestTokens);
+    const second = await getOfficialEpisode("67fc60374d8edb5eb86d6026", officialAudioTestTokens);
+    const third = await getOfficialEpisode("67fc60374d8edb5eb86d6026", officialAudioTestTokens);
+    assert.equal(first.audioUrl, "https://media.xyzcdn.net/media-url.m4a");
+    assert.equal(second.audioUrl, "https://media.xyzcdn.net/enclosure-only.m4a");
+    assert.equal(second.audioMimeType, "audio/mp4");
+    assert.equal(third.audioUrl, "https://media.xyzcdn.net/audio-field.m4a");
+    assert.equal(third.audioMimeType, "audio/mp4");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("rejects unsafe official audio URLs", () => {
+  assert.throws(() => validateOfficialAudioUrl("http://127.0.0.1/audio.m4a"), XiaoyuzhouError);
+  assert.throws(() => validateOfficialAudioUrl("https://example.com/audio.m4a"), XiaoyuzhouError);
+  assert.equal(validateOfficialAudioUrl("https://media.xyzcdn.net/audio.m4a"), "https://media.xyzcdn.net/audio.m4a");
 });
 
 test("formats timestamped Markdown without rewriting transcript text", () => {
@@ -1431,6 +1512,8 @@ test("formats timestamped Markdown without rewriting transcript text", () => {
     durationSeconds: 3723,
     publishedAt: "2025-08-28T00:00:00.000Z",
     mediaId: "media.m4a",
+    audioUrl: null,
+    audioMimeType: null,
   }, "https://www.xiaoyuzhoufm.com/episode/6a7e91ff36641f136d8807ab", [
     { startMs: 0, text: "原话一字不改。" },
     { startMs: 3_723_000, text: "第二段原话。" },
