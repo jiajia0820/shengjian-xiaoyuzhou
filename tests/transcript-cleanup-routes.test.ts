@@ -11,7 +11,7 @@ declare global { var __cleanupRouteDeps: Deps | undefined; }
 const exportsMap: Record<string, string> = {
   "@/lib/ai-settings": "readActiveAiConfiguration",
   "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,refundUsage,releaseAnalysisLease,touchCurrentDocument,touchCurrentDocumentIfHash",
-  "@/lib/documents": "deleteDocument,documentKeys,putJson,putMarkdown,readMarkdown",
+  "@/lib/documents": "deleteDocument,documentKeys,putJson,putMarkdown,putMarkdownIfEtag,readMarkdown,readMarkdownWithEtag",
   "@/lib/security": "sha256Hex",
   "@/lib/transcript-cleanup-ai": "runTranscriptCleanup",
   "@/lib/transcript-cleanup": "parseCleanupDocument",
@@ -42,7 +42,7 @@ const baseDeps = () => {
   const deps: Deps = {
     "@/lib/user": { HttpError: TestHttpError, requireApiUser: async () => ({ userId: "u1" }), apiError: (error: ErrorLike) => Response.json({ error: error.code ?? "INTERNAL_ERROR", message: error.message }, { status: error.status ?? 500 }) },
     "@/lib/db": { getEpisodeRecord: async () => ({ ...episode }), consumeUsage: async () => true, refundUsage: async () => undefined, acquireAnalysisLease: async () => "lease", releaseAnalysisLease: async () => undefined, touchCurrentDocument: async (_u: string, _e: string, h: string) => { touched = h; }, touchCurrentDocumentIfHash: async (_u: string, _e: string, expected: string, next: string) => { if (expected !== episode.content_hash) return false; touched = next; return true; } },
-    "@/lib/documents": { documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json", aiCleanupSnapshotKey: "snapshot.json" }), readMarkdown: async (key: string) => { assert.equal(key, "current.md"); return current; }, putJson: async (key: string, value: unknown) => { putCalls.push({ kind: "json", key, value }); }, putMarkdown: async (key: string, value: string) => { putCalls.push({ kind: "markdown", key, value }); current = value; }, deleteDocument: async (key: string) => { putCalls.push({ kind: "delete", key, value: undefined }); } },
+    "@/lib/documents": { documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json", aiCleanupSnapshotKey: "snapshot.json" }), readMarkdown: async (key: string) => { assert.equal(key, "current.md"); return current; }, readMarkdownWithEtag: async () => ({ markdown: current, etag: "etag-1" }), putJson: async (key: string, value: unknown) => { putCalls.push({ kind: "json", key, value }); }, putMarkdown: async (key: string, value: string) => { putCalls.push({ kind: "markdown", key, value }); current = value; }, putMarkdownIfEtag: async (key: string, value: string) => { await (deps["@/lib/documents"].putMarkdown as (k: string, v: string) => Promise<void>)(key, value); return true; }, deleteDocument: async (key: string) => { putCalls.push({ kind: "delete", key, value: undefined }); } },
     "@/lib/security": { sha256Hex: async (value: string) => hash(value) },
     "@/lib/ai-settings": { readActiveAiConfiguration: async () => ({ provider: "custom", model: "test-model", apiKey: "secret", baseUrl: "https://secret.example", apiFormat: "responses", reasoningEffort: null }) },
     "@/lib/transcript-cleanup-ai": { runTranscriptCleanup: async ({ markdown, onProgress }: { markdown: string; onProgress?: (progress: { stage: string }) => void }) => { await onProgress?.({ stage: "parsing" }); const cleaned = markdown.replace("嗯嗯 ", ""); return { markdown: cleaned, document: { blocks: [{ id: "b1" }] }, sourceDocument: { blocks: [{ id: "b1" }] }, stats: { processedBlocks: 1, changedBlocks: cleaned === markdown ? 0 : 1, fillerRemoved: 1, repetitionsMerged: 0, typosFixed: 0, punctuationAdjusted: 0, unprocessedBlocks: 0 }, failedBatchCount: 0, rejectedIds: [], provider: "custom", model: "test-model" }; } },
@@ -235,6 +235,7 @@ test("rejects oversized documents before quota or lease", async () => {
   for (const oversized of ["x".repeat(5_000_001), Array.from({ length: 400_001 }, () => "😀").join("")]) {
     const setup = baseDeps();
     setup.deps["@/lib/documents"].readMarkdown = async () => oversized;
+    setup.deps["@/lib/documents"].readMarkdownWithEtag = async () => ({ markdown: oversized, etag: "etag-1" });
     let consumed = 0; let leased = 0;
     setup.deps["@/lib/db"].consumeUsage = async () => { consumed++; return true; };
     setup.deps["@/lib/db"].acquireAnalysisLease = async () => { leased++; return "lease"; };
