@@ -274,3 +274,20 @@ test("rejects oversized model result before writing", async () => {
   assert.equal(response.status, 413);
   assert.equal(setup.putCalls.length, 0);
 });
+
+test("conditional write exception preserves concurrent current and snapshot", async () => {
+  const setup = baseDeps(); let current = beforeMarkdown;
+  setup.deps["@/lib/documents"].readMarkdown = async () => current;
+  setup.deps["@/lib/documents"].putMarkdownIfEtag = async () => { current = "并发编辑"; throw new Error("unknown write state"); };
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 502); assert.equal(current, "并发编辑"); assert.equal(setup.putCalls.some((c) => c.kind === "delete"), false);
+});
+
+test("release failure does not change successful cleanup response", async () => {
+  const setup = baseDeps(); let releases = 0;
+  setup.deps["@/lib/db"].releaseAnalysisLease = async () => { releases++; throw new Error("release failed"); };
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 200); assert.equal(releases, 1);
+});
