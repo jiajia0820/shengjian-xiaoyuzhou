@@ -163,3 +163,26 @@ test("system prompt 使用中文安全指令并要求只输出 schema JSON", asy
   assert.match(request.instructions, /只读/);
   assert.match(request.instructions, /schemaVersion\s*[=:：]\s*1/);
 });
+
+test("并发批次的 batch 进度使用累计成功块和失败批次数", async () => {
+  const source = `## 官方文稿\n\n### 主播\n\n[00:00:01] ${"a".repeat(7_000)}\n\n[00:00:02] ${"b".repeat(7_000)}\n`;
+  const progress: CleanupProgress[] = [];
+  const result = await runTranscriptCleanup({
+    markdown: source,
+    config,
+    onProgress: (event) => { progress.push(event); },
+    executeModel: async (_config, request) => {
+      const input = JSON.parse(request.input) as { blocks: Array<{ id: string; text: string }> };
+      const id = input.blocks[0].id;
+      await new Promise((resolve) => setTimeout(resolve, id === "seg-000001" ? 20 : 2));
+      if (id === "seg-000002") throw new Error("failed second batch");
+      return { text: response(input.blocks.map((block) => ({ id: block.id, text: block.text, changes: [] }))) };
+    },
+  });
+  const batches = progress.filter((event) => event.stage === "batch");
+  assert.equal(batches.length, 2);
+  assert.deepEqual(batches.map((event) => event.processedBlocks), [0, 1]);
+  assert.deepEqual(batches.map((event) => event.failedBatchCount), [1, 1]);
+  assert.equal(result.stats.processedBlocks, 1);
+  assert.equal(result.failedBatchCount, 1);
+});

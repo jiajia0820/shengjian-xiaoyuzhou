@@ -206,18 +206,22 @@ export async function runTranscriptCleanup({
   const chunks = splitCleanupBlocks(document.blocks, MAX_BATCH_CHARS);
   const outcomes: Array<BatchOutcome | undefined> = Array.from({ length: chunks.length });
   let nextIndex = 0;
+  let completedProcessedBlocks = 0;
+  let completedFailedBatches = 0;
   const worker = async (): Promise<void> => {
     while (true) {
       const batchIndex = nextIndex++;
       if (batchIndex >= chunks.length) return;
       outcomes[batchIndex] = await processBatch(document, chunks[batchIndex], document.blocks, config, executeModel);
       const outcome = outcomes[batchIndex]!;
+      if (isBatchFailure(outcome)) completedFailedBatches++;
+      else completedProcessedBlocks += chunks[batchIndex].length - outcome.rejectedIds.length;
       emitProgress(onProgress, {
         stage: "batch",
         batchIndex,
         batchCount: chunks.length,
-        processedBlocks: isBatchFailure(outcome) ? 0 : chunks[batchIndex].length - outcome.rejectedIds.length,
-        failedBatchCount: isBatchFailure(outcome) ? 1 : 0,
+        processedBlocks: completedProcessedBlocks,
+        failedBatchCount: completedFailedBatches,
         ...(isBatchFailure(outcome) && outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
       });
     }
