@@ -142,10 +142,12 @@ export async function POST(request: Request, context: Context) {
     }
     const requestedHash = ((body as Record<string, unknown>).currentHash as string).toLowerCase();
     if (wantsSse) {
+      let cancelled = false;
       const stream = new ReadableStream({
+        cancel() { cancelled = true; },
         start(controller) {
           const encoder = new TextEncoder();
-          const send = (event: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          const send = (event: unknown) => { if (!cancelled) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)); };
           void (async () => {
             try {
               const result = await performCleanup(user.userId, eid, requestedHash, (progress) => send({ type: "progress", ...progress }));
@@ -153,7 +155,7 @@ export async function POST(request: Request, context: Context) {
             } catch (error) {
               const safe = safeError(error);
               send({ type: "error", error: safe.code, message: safe.message });
-            } finally { controller.close(); }
+            } finally { if (!cancelled) controller.close(); }
           })();
         },
       });
