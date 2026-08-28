@@ -121,7 +121,7 @@ export async function POST(request: Request, context: Context) {
     if (!currentObject.etag) throw new HttpError(409, "CLEANUP_DOCUMENT_CHANGED", "当前文稿版本不可验证，请刷新后重试");
     const actualHash = (await sha256Hex(currentObject.markdown)).toLowerCase();
     if (requestedHash !== actualHash || actualHash !== snapshot.afterHash) {
-      throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已发生变化，无法安全撤销，请刷新后重试");
+      throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已被修改，请刷新后重试");
     }
 
     const leaseId = await acquireAnalysisLease(user.userId);
@@ -157,7 +157,7 @@ export async function POST(request: Request, context: Context) {
         } catch { /* preserve snapshot and report a safe write error */ }
         throw new HttpError(502, "CLEANUP_UNDO_WRITE_FAILED", "撤销写入失败，请稍后重试");
       }
-      if (!writtenEtag) throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已发生变化，无法安全撤销，请刷新后重试");
+      if (!writtenEtag) throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已被修改，请刷新后重试");
       writeSucceeded = true;
 
       let casUpdated = false;
@@ -167,7 +167,7 @@ export async function POST(request: Request, context: Context) {
         dbStateUnknown = true;
         throw new HttpError(502, "CLEANUP_UNDO_DB_FAILED", "撤销状态更新失败，请稍后重试");
       }
-      if (!casUpdated) throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已发生变化，无法安全撤销，请刷新后重试");
+      if (!casUpdated) throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已被修改，请刷新后重试");
 
       try {
         await deleteDocument(keys.aiCleanupSnapshotKey);

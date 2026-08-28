@@ -75,7 +75,7 @@ async function performCleanup(
   if (!currentObject.etag) throw new HttpError(409, "CLEANUP_DOCUMENT_CHANGED", "当前文稿版本不可验证，请刷新后重试");
   const beforeHash = await sha256Hex(markdown);
   if (beforeHash !== currentHash || (record.content_hash && record.content_hash !== beforeHash)) {
-    throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已发生变化，请刷新后重试");
+    throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已被修改，请刷新后重试");
   }
   if (new TextEncoder().encode(markdown).byteLength > 5_000_000 || Array.from(markdown).length > 400_000) {
     throw new HttpError(413, "CLEANUP_DOCUMENT_TOO_LARGE", "文稿超过清理上限");
@@ -124,7 +124,7 @@ async function performCleanup(
     catch (error) { await refundOnce(); throw safeError(error); }
     if (latestHash !== beforeHash) {
       await refundOnce();
-      throw new HttpError(409, "CLEANUP_STALE_HASH", "处理期间当前文稿已发生变化，请刷新后重试");
+      throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已被修改，请刷新后重试");
     }
     const afterHash = await sha256Hex(result.markdown);
     if (new TextEncoder().encode(result.markdown).byteLength > 5_000_000 || Array.from(result.markdown).length > 400_000) {
@@ -155,12 +155,12 @@ async function performCleanup(
       writtenEtag = await putMarkdownIfEtag(record.current_key, result.markdown, currentObject.etag);
       if (!writtenEtag) {
         casConflict = true;
-        throw new HttpError(409, "CLEANUP_STALE_HASH", "处理期间当前文稿已发生变化，请刷新后重试");
+        throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已被修改，请刷新后重试");
       }
       currentWriteSucceeded = true;
       if (!await touchCurrentDocumentIfHash(userId, eid, beforeHash, afterHash)) {
         casConflict = true;
-        throw new HttpError(409, "CLEANUP_STALE_HASH", "处理期间当前文稿已发生变化，请刷新后重试");
+        throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已被修改，请刷新后重试");
       }
     } catch (error) {
       // Best-effort compensation across object storage and DB; never report success on failure.

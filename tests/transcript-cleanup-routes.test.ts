@@ -72,6 +72,7 @@ test("stale current hash returns 409 without writes", async () => {
   const route = await loadRoute(setup.deps);
   const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
   assert.equal(response.status, 409);
+  assert.equal((await response.json() as { message: string }).message, "当前文稿已被修改，请刷新后重试");
   assert.equal(setup.putCalls.length, 0);
 });
 
@@ -306,7 +307,9 @@ test("CAS touch conflict returns stale error and never success", async () => {
   const route = await loadRoute(setup.deps);
   const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
   assert.equal(response.status, 409);
-  assert.equal((await response.json() as { error: string }).error, "CLEANUP_STALE_HASH");
+  const payload = await response.json() as { error: string; message: string };
+  assert.equal(payload.message, "当前文稿已被修改，请刷新后重试");
+  assert.equal(payload.error, "CLEANUP_STALE_HASH");
   assert.equal(setup.putCalls.some((call) => call.key === "transcript.json"), false);
 });
 
@@ -422,6 +425,7 @@ test("undo refuses a manual edit", async () => {
   const route = await loadUndoRoute(setup.deps);
   const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(setup.current) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
   assert.equal(response.status, 409);
+  assert.equal((await response.json() as { message: string }).message, "当前文稿已被修改，请刷新后重试");
   assert.equal(setup.current, "用户的新编辑");
   assert.notEqual(snapshot, null);
 });
