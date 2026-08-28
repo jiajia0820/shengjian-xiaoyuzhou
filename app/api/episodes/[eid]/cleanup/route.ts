@@ -121,7 +121,8 @@ export async function POST(request: Request, context: Context) {
     if (!body || typeof body !== "object" || !validHash((body as Record<string, unknown>).currentHash)) {
       throw new HttpError(400, "INVALID_CLEANUP_REQUEST", "currentHash 必须是有效的 SHA-256");
     }
-    const result = await performCleanup(user.userId, eid, (body as Record<string, unknown>).currentHash as string, (progress) => {
+    const requestedHash = ((body as Record<string, unknown>).currentHash as string).toLowerCase();
+    const result = await performCleanup(user.userId, eid, requestedHash, (progress) => {
       if (wantsSse) events.push({ type: "progress", ...progress });
     });
     if (wantsSse) {
