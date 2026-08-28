@@ -243,7 +243,7 @@ export function validateCleanupModelResult(document: CleanupDocument, result: Cl
     if (!segment.text.trim()) { rejectedIds.push(segment.id); continue; }
     if (segment.text !== block.text && !segment.changes.length) { rejectedIds.push(segment.id); continue; }
     const declaredText = applyDeclaredChanges(block.text, segment.changes);
-    if (declaredText === null || (segment.text !== block.text && declaredText !== segment.text)) { rejectedIds.push(segment.id); continue; }
+    if (declaredText === null || declaredText !== segment.text) { rejectedIds.push(segment.id); continue; }
     const unsafe = hasUnsafeMarker(segment.text) || segment.changes.some((change) => hasUnsafeMarker(change.from) || hasUnsafeMarker(change.to));
     const lowTypo = segment.changes.some((change) => change.type === "typo" && change.confidence < 0.9);
     const removalOnly = segment.changes.length > 0 && segment.changes.every((change) =>

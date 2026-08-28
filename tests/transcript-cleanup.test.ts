@@ -157,6 +157,10 @@ test("validate 只接受高置信 typo，拒绝低置信、危险、异常长度
   assert.ok(fakeRemoval.rejectedIds.includes("seg-000001"));
   const undeclaredRewrite = validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "同长度但未声明", changes: [] }] })), oneId);
   assert.ok(undeclaredRewrite.rejectedIds.includes("seg-000001"));
+  const mismatchedDeclaration = validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: document.blocks[0].text, changes: [{ type: "typo", from: "天气", to: "雨天", confidence: 0.99 }] }] })), oneId);
+  assert.deepEqual(mismatchedDeclaration.rejectedIds, ["seg-000001"]);
+  assert.equal(mismatchedDeclaration.replacements.size, 0);
+  assert.equal(mismatchedDeclaration.changes.length, 0);
   const fenced = validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "###", changes: [] }] })), oneId);
   assert.ok(fenced.rejectedIds.includes("seg-000001"));
   assert.throws(() => validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "x", changes: [] }] })), new Set(["seg-000001", "extra"])), /missing|extra|ID/i);
