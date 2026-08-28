@@ -30,9 +30,9 @@ export async function putJson(key: string, value: unknown): Promise<void> {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
   });
 }
-export async function putMarkdownIfEtag(key: string, markdown: string, etag: string): Promise<boolean> {
+export async function putMarkdownIfEtag(key: string, markdown: string, etag: string): Promise<string | null> {
   const result = await getRuntimeEnv().DOCUMENTS.put(key, markdown, { onlyIf: { etagMatches: etag }, httpMetadata: { contentType: "text/markdown; charset=utf-8" } });
-  return Boolean(result);
+  return result ? (result.etag ?? null) : null;
 }
 
 export async function readMarkdownWithEtag(key: string): Promise<{ markdown: string; etag: string | null }> {
