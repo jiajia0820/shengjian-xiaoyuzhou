@@ -236,6 +236,7 @@ test("rejects oversized documents before quota or lease", async () => {
     const setup = baseDeps();
     setup.deps["@/lib/documents"].readMarkdown = async () => oversized;
     setup.deps["@/lib/documents"].readMarkdownWithEtag = async () => ({ markdown: oversized, etag: "etag-1" });
+    setup.deps["@/lib/db"].getEpisodeRecord = async () => ({ ...episode, content_hash: hash(oversized) });
     let consumed = 0; let leased = 0;
     setup.deps["@/lib/db"].consumeUsage = async () => { consumed++; return true; };
     setup.deps["@/lib/db"].acquireAnalysisLease = async () => { leased++; return "lease"; };
