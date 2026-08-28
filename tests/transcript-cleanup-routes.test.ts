@@ -256,6 +256,14 @@ test("returns clear 400 when cleanup document has no editable blocks", async () 
   assert.equal(setup.putCalls.length, 0);
 });
 
+test("maps parser CLEANUP_NO_BLOCKS error to 400", async () => {
+  const setup = baseDeps();
+  setup.deps["@/lib/transcript-cleanup"].parseCleanupDocument = () => { const error = new Error("none"); Object.assign(error, { code: "CLEANUP_NO_BLOCKS" }); throw error; };
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 400);
+});
+
 test("rejects oversized model result before writing", async () => {
   const setup = baseDeps();
   const huge = "x".repeat(5_000_001);

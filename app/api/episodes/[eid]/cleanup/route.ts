@@ -50,7 +50,15 @@ async function performCleanup(
   if (new TextEncoder().encode(markdown).byteLength > 5_000_000 || Array.from(markdown).length > 400_000) {
     throw new HttpError(413, "CLEANUP_DOCUMENT_TOO_LARGE", "文稿超过清理上限");
   }
-  if (parseCleanupDocument(markdown).blocks.length === 0) {
+  let parsedDocument;
+  try { parsedDocument = parseCleanupDocument(markdown); }
+  catch (error) {
+    if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "CLEANUP_NO_BLOCKS") {
+      throw new HttpError(400, "CLEANUP_NO_BLOCKS", "文稿没有可清理的段落");
+    }
+    throw error;
+  }
+  if (parsedDocument.blocks.length === 0) {
     throw new HttpError(400, "CLEANUP_NO_BLOCKS", "文稿没有可清理的段落");
   }
   const beforeHash = await sha256Hex(markdown);
