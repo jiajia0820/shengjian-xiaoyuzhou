@@ -82,11 +82,13 @@ export function SpeakerDiarizationPanel({
   onSaved,
   reportNotice,
   onBusyChange,
+  disabled = false,
 }: {
   episode: { eid: string; durationSeconds: number | null; title: string };
   onSaved: (markdown: string) => void;
   reportNotice: (notice: Notice) => void;
   onBusyChange?: (busy: boolean) => void;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -291,17 +293,17 @@ export function SpeakerDiarizationPanel({
     .filter(({ segment }) => showAll || segment.speakerNeedsReview) ?? [];
 
   return <>
-    <button type="button" onClick={() => setOpen(true)}>从本地音频识别说话人</button>
+    <button type="button" disabled={disabled} onClick={() => setOpen(true)}>从本地音频识别说话人</button>
     {open && <div className="modal-backdrop speaker-diarization-backdrop">
       <section className="connect-modal speaker-diarization-modal" role="dialog" aria-modal="true" aria-labelledby="speaker-diarization-title">
-        <button className="modal-close" type="button" onClick={() => void close()} aria-label="关闭说话人识别">×</button>
+        <button className="modal-close" type="button" disabled={disabled || busy} onClick={() => void close()} aria-label="关闭说话人识别">×</button>
         <p className="modal-kicker">LOCAL · EXPERIMENTAL</p>
         <h2 id="speaker-diarization-title">按说话人分段</h2>
         <p>音频只发送到你电脑上的本地服务，不会上传到声笺服务器。系统不会改写官方正文。</p>
 
         {!preview ? <div className="speaker-upload-form">
           <label>选择本地音频
-            <input aria-label="选择本地音频" type="file" accept={AUDIO_ACCEPT} disabled={busy} onChange={handleFileChange} />
+            <input aria-label="选择本地音频" type="file" accept={AUDIO_ACCEPT} disabled={disabled || busy} onChange={handleFileChange} />
           </label>
           {file && <small>{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB</small>}
           {file && audioUrl && <div className="speaker-audio">
@@ -315,13 +317,13 @@ export function SpeakerDiarizationPanel({
             <small>{audioDurationMs ? `音频时长：${formatTime(audioDurationMs)}` : "正在读取音频时长…"}</small>
           </div>}
           <label>识别模式
-            <select aria-label="识别模式" value={mode} disabled={busy} onChange={(event) => setMode(event.target.value as LocalSpeakerMode)}>
+            <select aria-label="识别模式" value={mode} disabled={disabled || busy} onChange={(event) => setMode(event.target.value as LocalSpeakerMode)}>
               <option value="diarization">全自动识别</option>
               <option value="voiceprint">两人声纹</option>
             </select>
           </label>
           {mode === "diarization" && <label>说话人数
-            <select value={expectedSpeakers ?? "auto"} disabled={busy}
+            <select value={expectedSpeakers ?? "auto"} disabled={disabled || busy}
               onChange={(event) => setExpectedSpeakers(event.target.value === "auto" ? null : Number(event.target.value))}>
               <option value="auto">自动判断</option>
               {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => <option key={count} value={count}>{count} 人</option>)}
@@ -333,11 +335,11 @@ export function SpeakerDiarizationPanel({
               {(["speaker_0", "speaker_1"] as const).map((speakerId) => <div className="speaker-reference-card" key={speakerId}>
                 <strong>{speakerId === "speaker_0" ? "主持人参考" : "嘉宾参考"}</strong>
                 <label>开始（秒）
-                  <input type="number" min="0" step="0.1" inputMode="decimal" value={referenceInputs[speakerId].start}
+                  <input type="number" min="0" step="0.1" inputMode="decimal" disabled={disabled || busy} value={referenceInputs[speakerId].start}
                     onChange={(event) => updateReference(speakerId, "start", event.target.value)} />
                 </label>
                 <label>结束（秒）
-                  <input type="number" min="0" step="0.1" inputMode="decimal" value={referenceInputs[speakerId].end}
+                  <input type="number" min="0" step="0.1" inputMode="decimal" disabled={disabled || busy} value={referenceInputs[speakerId].end}
                     onChange={(event) => updateReference(speakerId, "end", event.target.value)} />
                 </label>
               </div>)}
@@ -349,18 +351,18 @@ export function SpeakerDiarizationPanel({
           {error && <p className="speaker-error" role="alert">{error}</p>}
           <div className="speaker-modal-actions">
             {busy ? <button type="button" className="danger-button" onClick={() => void close()}>取消本地任务</button>
-              : <button type="button" className="save-button" onClick={() => void start()}>开始识别</button>}
+              : <button type="button" className="save-button" disabled={disabled} onClick={() => void start()}>开始识别</button>}
           </div>
         </div> : <div className="speaker-review" aria-live="polite">
           <p>已完成对齐。{preview.reviewCount ? `${preview.reviewCount} 段需要你确认。` : "你仍可检查和修改归属。"}</p>
           <div className="speaker-label-grid">
             {labels.map((label) => <label key={label.id}>{label.id}
-              <input value={label.label} maxLength={40} onChange={(event) => setLabels((current) => current.map((item) => item.id === label.id ? { ...item, label: event.target.value } : item))} />
+              <input value={label.label} disabled={disabled} maxLength={40} onChange={(event) => setLabels((current) => current.map((item) => item.id === label.id ? { ...item, label: event.target.value } : item))} />
             </label>)}
           </div>
           <div className="speaker-review-head">
             <h3>待确认片段</h3>
-            <button type="button" onClick={() => setShowAll((current) => !current)}>{showAll ? "仅看待确认" : "查看全部片段"}</button>
+            <button type="button" disabled={disabled} onClick={() => setShowAll((current) => !current)}>{showAll ? "仅看待确认" : "查看全部片段"}</button>
           </div>
           <div className="speaker-review-list">
             {!visibleSegments.length && <p>没有待确认片段。</p>}
@@ -369,7 +371,7 @@ export function SpeakerDiarizationPanel({
               <p>{segment.text}</p>
               {segment.speakerNeedsReview && <span>待确认</span>}
               <label>归属
-                <select value={overrides[index] ?? segment.speakerId ?? ""} onChange={(event) => changeOverride(index, event.target.value)}>
+                <select value={overrides[index] ?? segment.speakerId ?? ""} disabled={disabled} onChange={(event) => changeOverride(index, event.target.value)}>
                   <option value="">待确认</option>
                   {labels.map((label) => <option key={label.id} value={label.id}>{label.label}</option>)}
                 </select>
@@ -379,8 +381,8 @@ export function SpeakerDiarizationPanel({
           {error && <p className="speaker-error" role="alert">{error}</p>}
           <p className="speaker-save-warning">音频不会上传，保存后将覆盖当前编辑稿。</p>
           <div className="speaker-modal-actions">
-            <button type="button" onClick={() => void close()} disabled={phase === "saving"}>取消</button>
-            <button className="save-button" type="button" onClick={() => void save()} disabled={phase === "saving"}>{phase === "saving" ? "保存中…" : "保存为当前稿"}</button>
+            <button type="button" onClick={() => void close()} disabled={disabled || phase === "saving"}>取消</button>
+            <button className="save-button" type="button" onClick={() => void save()} disabled={disabled || phase === "saving"}>{phase === "saving" ? "保存中…" : "保存为当前稿"}</button>
           </div>
         </div>}
       </section>

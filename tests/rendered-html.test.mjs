@@ -76,6 +76,31 @@ test("wires a local-only speaker review panel into the transcript toolbar", asyn
   assert.doesNotMatch(client, /credentials:\s*["']include["']/);
 });
 
+test("wires AI transcript cleanup controls and hash-protected requests", async () => {
+  const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
+  assert.match(workspace, /AI 清理文稿/);
+  assert.match(workspace, /撤销 AI 清理/);
+  assert.match(workspace, /cleanupProcessing/);
+  assert.match(workspace, /cleanupProgress/);
+  assert.match(workspace, /cleanupStats/);
+  assert.match(workspace, /cleanupUndoAvailable/);
+  assert.match(workspace, /\/cleanup`/);
+  assert.match(workspace, /\/cleanup\/undo`/);
+  assert.match(workspace, /currentHash/);
+  assert.match(workspace, /body:\s*JSON\.stringify\(\{ currentHash \}\)/);
+  assert.match(workspace, /setMarkdown\(result\.markdown\)/);
+  assert.match(workspace, /setCleanupStats\(result\.stats\)/);
+  assert.match(workspace, /setCleanupUndoAvailable\(result\.undoAvailable/);
+  assert.match(workspace, /Accept["']?\s*:\s*["']text\/event-stream/);
+  assert.match(workspace, /processedBlocks|processed/);
+  assert.match(workspace, /changedBlocks|changed/);
+  assert.match(workspace, /fillerRemoved|filler/);
+  assert.match(workspace, /repetitionsMerged|repetition/);
+  assert.match(workspace, /typosFixed|typo/);
+  assert.match(workspace, /unprocessedBlocks|unprocessed/);
+  assert.match(workspace, /disabled=\{cleanupProcessing/);
+});
+
 test("shows chunk progress for long local speaker jobs", async () => {
   const panel = await readFile(new URL("../app/speaker-diarization-panel.tsx", import.meta.url), "utf8");
   assert.match(panel, /第 \$\{chunkIndex\}\/\$\{chunkCount\} 块/);

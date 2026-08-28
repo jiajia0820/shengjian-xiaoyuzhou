@@ -7,6 +7,13 @@ import XiaoyuzhouCaptcha, {
   type XiaoyuzhouCaptchaToken,
 } from "@/app/xiaoyuzhou-captcha";
 import { SpeakerDiarizationPanel } from "@/app/speaker-diarization-panel";
+import {
+  cleanupProgressLabel,
+  consumeCleanupResponse,
+  sha256Hex,
+  type CleanupProgress,
+  type CleanupStats,
+} from "@/lib/transcript-cleanup-client";
 
 type AccountStatus = { connected: boolean; phoneHint: string | null; connectedAt: string | null; displayName: string };
 type AiProvider = "deepseek" | "custom";
@@ -118,6 +125,11 @@ export default function Workspace({
   const [documentTab, setDocumentTab] = useState<DocumentTab>("transcript");
   const [documentLoading, setDocumentLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [cleanupProcessing, setCleanupProcessing] = useState(false);
+  const [cleanupProgress, setCleanupProgress] = useState("准备处理文稿…");
+  const [cleanupStats, setCleanupStats] = useState<CleanupStats | null>(null);
+  const [cleanupUndoAvailable, setCleanupUndoAvailable] = useState(false);
+  const [speakerLayoutStale, setSpeakerLayoutStale] = useState(false);
   const [speakerProcessing, setSpeakerProcessing] = useState(false);
   const [deletingEid, setDeletingEid] = useState<string | null>(null);
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
@@ -272,6 +284,9 @@ export default function Workspace({
     setEditorMode("preview");
     setDocumentLoading(true);
     setAnalysisMarkdown("");
+    setCleanupStats(null);
+    setCleanupUndoAvailable(false);
+    setSpeakerLayoutStale(false);
     try {
       const [documentData, analysisData] = await Promise.all([
         responseJson<{ markdown: string }>(await apiFetch(`/api/episodes/${episode.eid}`, { cache: "no-store" })),
@@ -288,6 +303,7 @@ export default function Workspace({
 
   async function importEpisode(event?: FormEvent, refresh = false) {
     event?.preventDefault();
+    if (cleanupProcessing) return;
     if (!account?.connected) {
       setConnectOpen(true);
       return;
@@ -306,6 +322,9 @@ export default function Workspace({
       if (!refresh) setEpisodeUrl("");
       setSelected(data.episode);
       setMarkdown(data.markdown);
+      setCleanupStats(null);
+      setCleanupUndoAvailable(false);
+      setSpeakerLayoutStale(false);
       setDocumentTab("transcript");
       setEditorMode("preview");
       const analysisData = await responseJson<{ results: AnalysisResult[] }>(
@@ -325,7 +344,7 @@ export default function Workspace({
   }
 
   async function saveDocument() {
-    if (!selected) return;
+    if (!selected || cleanupProcessing) return;
     setSaving(true);
     try {
       await responseJson(await apiFetch(`/api/episodes/${selected.eid}`, {
@@ -342,12 +361,72 @@ export default function Workspace({
     }
   }
 
+  async function cleanupTranscript() {
+    if (!selected || cleanupProcessing) return;
+    const episodeId = selected.eid;
+    const sourceMarkdown = markdown;
+    setCleanupProcessing(true);
+    setCleanupProgress("准备处理文稿…");
+    try {
+      const currentHash = await sha256Hex(sourceMarkdown);
+      const response = await apiFetch(`/api/episodes/${episodeId}/cleanup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({ currentHash }),
+      });
+      const result = await consumeCleanupResponse(response, (progress: CleanupProgress) => {
+        setCleanupProgress(cleanupProgressLabel(progress));
+      });
+      setMarkdown(result.markdown);
+      setCleanupStats(result.stats);
+      setCleanupUndoAvailable(result.undoAvailable !== false);
+      setSpeakerLayoutStale(Boolean(result.speakerLayoutStale));
+      setEditorMode("preview");
+      await loadEpisodes();
+      setNotice({ kind: "success", text: "AI 清理完成，已保留撤销快照" });
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "AI 清理失败，当前文稿未改变" });
+    } finally {
+      setCleanupProcessing(false);
+    }
+  }
+
+  async function undoCleanup() {
+    if (!selected || cleanupProcessing || !cleanupUndoAvailable) return;
+    try {
+      const currentHash = await sha256Hex(markdown);
+      const response = await apiFetch(`/api/episodes/${selected.eid}/cleanup/undo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentHash }),
+      });
+      if (response.status === 409) {
+        const data = await response.json().catch(() => ({})) as { message?: string };
+        setNotice({ kind: "info", text: data.message || "当前文稿已被修改，请刷新后重试" });
+        return;
+      }
+      const data = await responseJson<{ markdown: string }>(response);
+      setMarkdown(data.markdown);
+      setCleanupStats(null);
+      setCleanupUndoAvailable(false);
+      setSpeakerLayoutStale(false);
+      setEditorMode("preview");
+      await loadEpisodes();
+      setNotice({ kind: "success", text: "已撤销 AI 清理，恢复清理前的编辑稿" });
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "撤销 AI 清理失败" });
+    }
+  }
+
   async function restoreOriginal() {
-    if (!selected || !window.confirm("用官方原稿覆盖当前编辑稿？官方原稿本身不会改变。")) return;
+    if (!selected || cleanupProcessing || !window.confirm("用官方原稿覆盖当前编辑稿？官方原稿本身不会改变。")) return;
     setSaving(true);
     try {
       const data = await responseJson<{ markdown: string }>(await apiFetch(`/api/episodes/${selected.eid}/restore`, { method: "POST" }));
       setMarkdown(data.markdown);
+      setCleanupStats(null);
+      setCleanupUndoAvailable(false);
+      setSpeakerLayoutStale(false);
       setAnalysisResults((results) => results.map((result) => result.sourceType === "current" ? { ...result, stale: true } : result));
       setEditorMode("preview");
       await loadEpisodes();
@@ -361,7 +440,7 @@ export default function Workspace({
 
   async function deleteEpisode() {
     const episode = selected;
-    if (!episode) return;
+    if (!episode || cleanupProcessing) return;
     const confirmed = window.confirm(
       `永久删除“${episode.title}”？官方原稿、编辑稿、内容梳理和学习 Prompt 都会删除，且无法恢复。`,
     );
@@ -394,6 +473,7 @@ export default function Workspace({
   }
 
   async function downloadFile(url: string, filename: string) {
+    if (cleanupProcessing) return;
     try {
       await downloadWithAuth(url, filename.replace(/[\\/:*?"<>|]/g, "-").slice(0, 120));
     } catch (error) {
@@ -426,6 +506,7 @@ export default function Workspace({
   }
 
   function switchDocumentTab(tab: DocumentTab) {
+    if (cleanupProcessing) return;
     setDocumentTab(tab);
     setEditorMode("preview");
     if (tab === "summary") void loadAnalysis(`summary:${selectedFrameworkId}`);
@@ -438,7 +519,7 @@ export default function Workspace({
   }
 
   async function generateAnalysis() {
-    if (!selected || documentTab === "transcript") return;
+    if (!selected || documentTab === "transcript" || cleanupProcessing) return;
     if (!aiSettings.defaultProvider) {
       setAiModalOpen(true);
       setNotice({ kind: "info", text: "请先设置 AI 提供商" });
@@ -922,55 +1003,58 @@ export default function Workspace({
         <div className="document-drawer" role="dialog" aria-modal="true" aria-labelledby="document-title">
           <div className="drawer-header">
             <div><span>{selected.podcastTitle}</span><h2 id="document-title">{selected.title}</h2></div>
-            <button className="drawer-close" type="button" disabled={speakerProcessing} onClick={() => setSelected(null)} aria-label="关闭文稿">×</button>
+            <button className="drawer-close" type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => setSelected(null)} aria-label="关闭文稿">×</button>
           </div>
           <nav className="document-tabs" aria-label="文稿内容">
-            <button className={documentTab === "transcript" ? "active" : ""} type="button" disabled={speakerProcessing} onClick={() => switchDocumentTab("transcript")}>文稿</button>
-            <button className={documentTab === "summary" ? "active" : ""} type="button" disabled={speakerProcessing} onClick={() => switchDocumentTab("summary")}>内容梳理</button>
-            <button className={documentTab === "learning_prompt" ? "active" : ""} type="button" disabled={speakerProcessing} onClick={() => switchDocumentTab("learning_prompt")}>学习 Prompt</button>
+            <button className={documentTab === "transcript" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("transcript")}>文稿</button>
+            <button className={documentTab === "summary" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("summary")}>内容梳理</button>
+            <button className={documentTab === "learning_prompt" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("learning_prompt")}>学习 Prompt</button>
           </nav>
 
           {documentTab === "transcript" ? (
             <div className="document-toolbar">
               <div className="mode-switch">
-                <button className={editorMode === "preview" ? "active" : ""} type="button" disabled={speakerProcessing} onClick={() => setEditorMode("preview")}>阅读</button>
-                <button className={editorMode === "edit" ? "active" : ""} type="button" disabled={speakerProcessing} onClick={() => setEditorMode("edit")}>编辑 Markdown</button>
+                <button className={editorMode === "preview" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => setEditorMode("preview")}>阅读</button>
+                <button className={editorMode === "edit" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => setEditorMode("edit")}>编辑 Markdown</button>
               </div>
               <div className="document-actions">
-                <button type="button" disabled={speakerProcessing} onClick={() => void copyText(markdown, "Markdown 已复制")}>复制</button>
-                <button type="button" disabled={speakerProcessing} onClick={() => void downloadFile(`/api/episodes/${selected.eid}/download`, `${selected.title}.md`)}>下载 .md</button>
-                <button type="button" disabled={importing || speakerProcessing} onClick={() => void importEpisode(undefined, true)}>重新获取原稿</button>
-                <button type="button" disabled={saving || speakerProcessing} onClick={() => void restoreOriginal()}>恢复原稿</button>
+                <button type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => void copyText(markdown, "Markdown 已复制")}>复制</button>
+                <button type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => void downloadFile(`/api/episodes/${selected.eid}/download`, `${selected.title}.md`)}>下载 .md</button>
+                <button type="button" disabled={importing || speakerProcessing || cleanupProcessing} onClick={() => void importEpisode(undefined, true)}>重新获取原稿</button>
+                <button type="button" disabled={saving || speakerProcessing || cleanupProcessing} onClick={() => void restoreOriginal()}>恢复原稿</button>
+                <button type="button" disabled={cleanupProcessing || speakerProcessing} onClick={() => void cleanupTranscript()}>AI 清理文稿</button>
+                {cleanupUndoAvailable && <button type="button" disabled={cleanupProcessing || speakerProcessing} onClick={() => void undoCleanup()}>撤销 AI 清理</button>}
                 <SpeakerDiarizationPanel
                   episode={selected}
                   onSaved={(nextMarkdown) => { setMarkdown(nextMarkdown); setEditorMode("preview"); void loadEpisodes(); }}
                   reportNotice={setNotice}
                   onBusyChange={setSpeakerProcessing}
+                  disabled={cleanupProcessing}
                 />
                 <button className="danger-button" type="button"
-                  disabled={deletingEid === selected.eid || saving || generating || importing || speakerProcessing}
+                  disabled={deletingEid === selected.eid || saving || generating || importing || speakerProcessing || cleanupProcessing}
                   onClick={() => void deleteEpisode()}>{deletingEid === selected.eid ? "删除中…" : "删除文稿"}</button>
-                {editorMode === "edit" && <button className="save-button" type="button" disabled={saving || speakerProcessing} onClick={() => void saveDocument()}>{saving ? "保存中…" : "保存编辑"}</button>}
+                {editorMode === "edit" && <button className="save-button" type="button" disabled={saving || speakerProcessing || cleanupProcessing} onClick={() => void saveDocument()}>{saving ? "保存中…" : "保存编辑"}</button>}
               </div>
             </div>
           ) : (
             <div className="analysis-toolbar">
               <div className="analysis-selects">
                 {documentTab === "summary" && (
-                  <label><span>梳理框架</span><select value={selectedFrameworkId} onChange={(event) => changeFramework(event.target.value)}>
+                    <label><span>梳理框架</span><select disabled={cleanupProcessing} value={selectedFrameworkId} onChange={(event) => changeFramework(event.target.value)}>
                     {frameworkOptions.map((framework) => <option key={framework.id} value={framework.id}>{framework.name}{framework.isDeleted ? "（已删除）" : ""}</option>)}
                   </select></label>
                 )}
-                <label><span>分析来源</span><select value={analysisSource} onChange={(event) => setAnalysisSource(event.target.value as "original" | "current")}>
+                <label><span>分析来源</span><select disabled={cleanupProcessing} value={analysisSource} onChange={(event) => setAnalysisSource(event.target.value as "original" | "current")}>
                   <option value="current">当前编辑稿</option><option value="original">官方原稿</option>
                 </select></label>
               </div>
               <div className="analysis-actions">
                 {selectedAnalysis?.stale && <span className="stale-badge">分析已过期</span>}
                 {selectedAnalysis && <span className="analysis-meta">{selectedAnalysis.sourceType === "current" ? "编辑稿" : "原稿"} · {dateLabel(selectedAnalysis.generatedAt)}</span>}
-                {analysisMarkdown && <button type="button" onClick={() => void copyText(analysisMarkdown, "分析 Markdown 已复制")}>复制</button>}
-                {selectedAnalysis && <button type="button" onClick={() => void downloadFile(`/api/episodes/${selected.eid}/analyses/download?slot=${encodeURIComponent(selectedSlot)}`, `${selected.title}-${documentTab === "summary" ? "内容梳理" : "学习Prompt"}.md`)}>下载 .md</button>}
-                <button className="save-button" type="button" disabled={generating || Boolean(selectedFramework?.isDeleted)} onClick={() => void generateAnalysis()}>
+                {analysisMarkdown && <button type="button" disabled={cleanupProcessing} onClick={() => void copyText(analysisMarkdown, "分析 Markdown 已复制")}>复制</button>}
+                {selectedAnalysis && <button type="button" disabled={cleanupProcessing} onClick={() => void downloadFile(`/api/episodes/${selected.eid}/analyses/download?slot=${encodeURIComponent(selectedSlot)}`, `${selected.title}-${documentTab === "summary" ? "内容梳理" : "学习Prompt"}.md`)}>下载 .md</button>}
+                <button className="save-button" type="button" disabled={generating || cleanupProcessing || Boolean(selectedFramework?.isDeleted)} onClick={() => void generateAnalysis()}>
                   {generating ? "AI 正在阅读全文…" : selectedAnalysis ? "重新生成" : "开始生成"}
                 </button>
               </div>
@@ -980,8 +1064,17 @@ export default function Workspace({
           <div className="document-body">
             {documentTab === "transcript" ? (
               documentLoading ? <div className="document-loading">正在读取 Markdown…</div>
-                : editorMode === "edit" ? <textarea aria-label="Markdown 编辑器" value={markdown} onChange={(event) => setMarkdown(event.target.value)} spellCheck={false} />
-                  : <MarkdownPreview markdown={markdown} />
+                : cleanupProcessing ? <div className="cleanup-status" role="status" aria-live="polite"><strong>{cleanupProgress}</strong><span>请保持页面打开，当前文稿会在完成后更新。</span></div>
+                : editorMode === "edit" ? <textarea aria-label="Markdown 编辑器" disabled={cleanupProcessing} value={markdown} onChange={(event) => setMarkdown(event.target.value)} spellCheck={false} />
+                  : <>
+                    {cleanupStats && <div className="cleanup-summary" role="status" aria-live="polite">
+                      <strong>AI 清理统计</strong>
+                      <span>处理 {cleanupStats.processedBlocks} 段 · 变更 {cleanupStats.changedBlocks} 段</span>
+                      <span>删除语气词 {cleanupStats.fillerRemoved} · 合并重复 {cleanupStats.repetitionsMerged} · 修正错字 {cleanupStats.typosFixed}</span>
+                      <span>未处理 {cleanupStats.unprocessedBlocks} 段{speakerLayoutStale ? " · 说话人布局需重新生成" : ""}</span>
+                    </div>}
+                    <MarkdownPreview markdown={markdown} />
+                  </>
             ) : analysisLoading ? (
               <div className="document-loading">正在读取分析结果…</div>
             ) : generating ? (
