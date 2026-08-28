@@ -47,6 +47,10 @@ async function performCleanup(
   const currentObject = await readMarkdownWithEtag(record.current_key);
   const markdown = currentObject.markdown;
   if (!currentObject.etag) throw new HttpError(409, "CLEANUP_DOCUMENT_CHANGED", "当前文稿版本不可验证，请刷新后重试");
+  const beforeHash = await sha256Hex(markdown);
+  if (beforeHash !== currentHash || (record.content_hash && record.content_hash !== beforeHash)) {
+    throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已发生变化，请刷新后重试");
+  }
   if (new TextEncoder().encode(markdown).byteLength > 5_000_000 || Array.from(markdown).length > 400_000) {
     throw new HttpError(413, "CLEANUP_DOCUMENT_TOO_LARGE", "文稿超过清理上限");
   }
@@ -60,10 +64,6 @@ async function performCleanup(
   }
   if (parsedDocument.blocks.length === 0) {
     throw new HttpError(400, "CLEANUP_NO_BLOCKS", "文稿没有可清理的段落");
-  }
-  const beforeHash = await sha256Hex(markdown);
-  if (beforeHash !== currentHash || (record.content_hash && record.content_hash !== beforeHash)) {
-    throw new HttpError(409, "CLEANUP_STALE_HASH", "当前文稿已发生变化，请刷新后重试");
   }
   if (!await consumeUsage(userId, "ai", 20)) {
     throw new HttpError(429, "DAILY_AI_LIMIT", "今天的 20 次 AI 清理额度已用完，请明天再试");
