@@ -92,6 +92,7 @@ async function performCleanup(
     };
     let snapshotWritten = false;
     let currentWriteStarted = false;
+    let casConflict = false;
     try {
       onProgress?.({ stage: "saving" });
       await putJson(keys.aiCleanupSnapshotKey, snapshot);
@@ -99,6 +100,7 @@ async function performCleanup(
       currentWriteStarted = true;
       await putMarkdown(record.current_key, result.markdown);
       if (!await touchCurrentDocumentIfHash(userId, eid, beforeHash, afterHash)) {
+        casConflict = true;
         throw new HttpError(409, "CLEANUP_STALE_HASH", "处理期间当前文稿已发生变化，请刷新后重试");
       }
     } catch (error) {
@@ -106,14 +108,20 @@ async function performCleanup(
       let currentRestored = !currentWriteStarted;
       let hashRestored = !currentWriteStarted;
       if (currentWriteStarted) {
-        try { await putMarkdown(record.current_key, markdown); currentRestored = true; } catch { /* retain snapshot for manual recovery */ }
-        try {
-          hashRestored = await touchCurrentDocumentIfHash(userId, eid, afterHash, beforeHash);
-          if (!hashRestored) {
-            const observed = await sha256Hex(await readMarkdown(record.current_key));
-            hashRestored = observed === beforeHash;
-          }
-        } catch { /* best effort */ }
+        let canRestore = !casConflict;
+        if (casConflict) {
+          try { canRestore = (await sha256Hex(await readMarkdown(record.current_key))) === afterHash; } catch { canRestore = false; }
+        }
+        if (canRestore) {
+          try { await putMarkdown(record.current_key, markdown); currentRestored = true; } catch { /* retain snapshot for manual recovery */ }
+          try {
+            hashRestored = await touchCurrentDocumentIfHash(userId, eid, afterHash, beforeHash);
+            if (!hashRestored) {
+              const observed = await sha256Hex(await readMarkdown(record.current_key));
+              hashRestored = observed === beforeHash;
+            }
+          } catch { /* best effort */ }
+        }
       }
       if (snapshotWritten && currentRestored && hashRestored) {
         try { await deleteDocument(keys.aiCleanupSnapshotKey); } catch { /* retain snapshot for recovery */ }
