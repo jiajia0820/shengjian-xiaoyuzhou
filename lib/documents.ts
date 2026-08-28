@@ -30,6 +30,16 @@ export async function putJson(key: string, value: unknown): Promise<void> {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
   });
 }
+export async function putMarkdownIfEtag(key: string, markdown: string, etag: string): Promise<boolean> {
+  const result = await getRuntimeEnv().DOCUMENTS.put(key, markdown, { onlyIf: { etagMatches: etag }, httpMetadata: { contentType: "text/markdown; charset=utf-8" } });
+  return Boolean(result);
+}
+
+export async function readMarkdownWithEtag(key: string): Promise<{ markdown: string; etag: string | null }> {
+  const object = await getRuntimeEnv().DOCUMENTS.get(key);
+  if (!object) throw new HttpError(404, "DOCUMENT_NOT_FOUND", "文稿文件不存在");
+  return { markdown: await object.text(), etag: object.etag ?? null };
+}
 
 export async function deleteDocument(key: string): Promise<void> {
   await getRuntimeEnv().DOCUMENTS.delete(key);
