@@ -9,6 +9,7 @@ export async function documentKeys(userId: string, eid: string) {
     originalKey: `${base}/original.md`,
     currentKey: `${base}/current.md`,
     transcriptKey: `${base}/transcript.json`,
+    aiCleanupSnapshotKey: `${base}/revisions/ai-cleanup-latest.json`,
   };
 }
 
