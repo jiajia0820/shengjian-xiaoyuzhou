@@ -135,6 +135,26 @@ export function buildTranscriptArtifact(
   };
 }
 
+export function withCurrentMarkdownHash(
+  artifact: TranscriptArtifact,
+  currentMarkdownHash: string,
+): TranscriptArtifact {
+  if (typeof currentMarkdownHash !== "string" || !/^[0-9a-f]{64}$/i.test(currentMarkdownHash)) {
+    throw new TypeError("currentMarkdownHash must be a valid SHA-256 hash");
+  }
+  return {
+    ...artifact,
+    segments: artifact.segments.map((segment) => ({ ...segment })),
+    speakerLayout: artifact.speakerLayout
+      ? {
+          ...artifact.speakerLayout,
+          currentMarkdownHash,
+          labels: artifact.speakerLayout.labels.map((label) => ({ ...label })),
+        }
+      : null,
+  };
+}
+
 export function parseTranscriptArtifact(value: string): TranscriptArtifact | null {
   try {
     const parsed = objectValue(JSON.parse(value));

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { registerHooks } from "node:module";
 import test from "node:test";
+import { parseTranscriptArtifact, withCurrentMarkdownHash } from "../lib/transcript-artifact.ts";
 
 type Deps = Record<string, Record<string, unknown>>;
 type ErrorLike = { code?: string; message?: string; status?: number };
@@ -15,6 +16,7 @@ const exportsMap: Record<string, string> = {
   "@/lib/security": "sha256Hex",
   "@/lib/transcript-cleanup-ai": "runTranscriptCleanup",
   "@/lib/transcript-cleanup": "parseCleanupDocument",
+  "@/lib/transcript-artifact": "parseTranscriptArtifact,withCurrentMarkdownHash",
   "@/lib/user": "apiError,HttpError,requireApiUser",
 };
 registerHooks({
@@ -47,6 +49,7 @@ const baseDeps = () => {
     "@/lib/ai-settings": { readActiveAiConfiguration: async () => ({ provider: "custom", model: "test-model", apiKey: "secret", baseUrl: "https://secret.example", apiFormat: "responses", reasoningEffort: null }) },
     "@/lib/transcript-cleanup-ai": { runTranscriptCleanup: async ({ markdown, onProgress }: { markdown: string; onProgress?: (progress: { stage: string }) => void }) => { await onProgress?.({ stage: "parsing" }); const cleaned = markdown.replace("嗯嗯 ", ""); return { markdown: cleaned, document: { blocks: [{ id: "b1" }] }, sourceDocument: { blocks: [{ id: "b1" }] }, stats: { processedBlocks: 1, changedBlocks: cleaned === markdown ? 0 : 1, fillerRemoved: 1, repetitionsMerged: 0, typosFixed: 0, punctuationAdjusted: 0, unprocessedBlocks: 0 }, failedBatchCount: 0, rejectedIds: [], provider: "custom", model: "test-model" }; } },
     "@/lib/transcript-cleanup": { parseCleanupDocument: (markdown: string) => ({ blocks: markdown ? [{ id: "b1" }] : [] }) },
+    "@/lib/transcript-artifact": { parseTranscriptArtifact, withCurrentMarkdownHash },
   };
   return { deps, putCalls, get current() { return current; }, set current(value: string) { current = value; }, get touched() { return touched; } };
 };
@@ -83,6 +86,86 @@ test("successful cleanup writes snapshot before current and returns hashes", asy
   assert.equal(payload.afterHash, hash(payload.markdown));
   assert.equal(setup.touched, payload.afterHash);
   assert.equal(payload.undoAvailable, true);
+});
+
+function transcriptFixture(currentMarkdownHash: string, episodeId = "ep-1") {
+  return {
+    schemaVersion: 2,
+    source: "xiaoyuzhou",
+    episodeId,
+    capturedAt: "2026-08-24T00:00:00.000Z",
+    segments: [{ startMs: 0, endMs: 800, text: "原文", speakerId: "speaker_0", speakerConfidence: 0.8, speakerNeedsReview: true }],
+    speakerLayout: {
+      engine: "pyannote-wespeaker-voiceprint-v1",
+      generatedAt: "2026-08-24T00:00:01.000Z",
+      currentMarkdownHash,
+      labels: [{ id: "speaker_0", label: "主持人" }],
+    },
+  };
+}
+
+test("successful cleanup synchronizes matching transcript artifact hash", async () => {
+  const setup = baseDeps();
+  const artifact = transcriptFixture(hash(beforeMarkdown));
+  setup.deps["@/lib/documents"].readJson = async (key: string) => {
+    if (key === "transcript.json") return JSON.stringify(artifact);
+    throw new TestHttpError(404, "DOCUMENT_NOT_FOUND", "missing");
+  };
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  const payload = await response.json() as { afterHash: string; speakerLayoutStale: boolean };
+  assert.equal(response.status, 200);
+  assert.equal(payload.speakerLayoutStale, false);
+  const transcriptWrite = setup.putCalls.find((call) => call.key === "transcript.json");
+  assert.ok(transcriptWrite);
+  const updated = transcriptWrite!.value as typeof artifact;
+  assert.equal(updated.speakerLayout.currentMarkdownHash, payload.afterHash);
+  assert.deepEqual(updated.segments, artifact.segments);
+  assert.deepEqual(updated.speakerLayout.labels, artifact.speakerLayout.labels);
+});
+
+test("cleanup marks speaker layout stale when artifact hash does not match", async () => {
+  const setup = baseDeps();
+  setup.deps["@/lib/documents"].readJson = async (key: string) => key === "transcript.json"
+    ? JSON.stringify(transcriptFixture("a".repeat(64)))
+    : (() => { throw new TestHttpError(404, "DOCUMENT_NOT_FOUND", "missing"); })();
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  const payload = await response.json() as { speakerLayoutStale: boolean };
+  assert.equal(response.status, 200);
+  assert.equal(payload.speakerLayoutStale, true);
+  assert.equal(setup.putCalls.some((call) => call.key === "transcript.json"), false);
+});
+
+test("cleanup keeps success but marks stale for malformed or foreign transcript artifacts", async () => {
+  for (const raw of ["not-json", JSON.stringify(transcriptFixture(hash(beforeMarkdown), "other-episode"))]) {
+    const setup = baseDeps();
+    setup.deps["@/lib/documents"].readJson = async (key: string) => key === "transcript.json" ? raw : (() => { throw new TestHttpError(404, "DOCUMENT_NOT_FOUND", "missing"); })();
+    const route = await loadRoute(setup.deps);
+    const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+    const payload = await response.json() as { speakerLayoutStale: boolean };
+    assert.equal(response.status, 200);
+    assert.equal(payload.speakerLayoutStale, true);
+    assert.equal(setup.putCalls.some((call) => call.key === "transcript.json"), false);
+  }
+});
+
+test("artifact write failure does not roll back successful cleanup", async () => {
+  const setup = baseDeps();
+  setup.deps["@/lib/documents"].readJson = async (key: string) => key === "transcript.json"
+    ? JSON.stringify(transcriptFixture(hash(beforeMarkdown)))
+    : (() => { throw new TestHttpError(404, "DOCUMENT_NOT_FOUND", "missing"); })();
+  const originalPutJson = setup.deps["@/lib/documents"].putJson;
+  setup.deps["@/lib/documents"].putJson = async (key: string, value: unknown) => {
+    if (key === "transcript.json") throw new Error("artifact write failed");
+    return (originalPutJson as (key: string, value: unknown) => Promise<void>)(key, value);
+  };
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  const payload = await response.json() as { speakerLayoutStale: boolean };
+  assert.equal(response.status, 200);
+  assert.equal(payload.speakerLayoutStale, true);
+  assert.notEqual(setup.current, beforeMarkdown);
 });
 
 test("all provider batch failures return 502 and do not write", async () => {
@@ -216,11 +299,15 @@ test("rejects unsafe episode ids and mismatched current keys without writes", as
 
 test("CAS touch conflict returns stale error and never success", async () => {
   const setup = baseDeps();
+  setup.deps["@/lib/documents"].readJson = async (key: string) => key === "transcript.json"
+    ? JSON.stringify(transcriptFixture(hash(beforeMarkdown)))
+    : (() => { throw new TestHttpError(404, "DOCUMENT_NOT_FOUND", "missing"); })();
   setup.deps["@/lib/db"].touchCurrentDocumentIfHash = async () => false;
   const route = await loadRoute(setup.deps);
   const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
   assert.equal(response.status, 409);
   assert.equal((await response.json() as { error: string }).error, "CLEANUP_STALE_HASH");
+  assert.equal(setup.putCalls.some((call) => call.key === "transcript.json"), false);
 });
 
 test("CAS conflict preserves cleaned current and snapshot evidence", async () => {

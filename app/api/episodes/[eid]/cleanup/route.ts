@@ -7,8 +7,9 @@ import {
   releaseAnalysisLease,
   touchCurrentDocumentIfHash,
 } from "@/lib/db";
-import { deleteDocument, documentKeys, putJson, putMarkdownIfEtag, readMarkdown, readMarkdownWithEtag } from "@/lib/documents";
+import { deleteDocument, documentKeys, putJson, putMarkdownIfEtag, readJson, readMarkdown, readMarkdownWithEtag } from "@/lib/documents";
 import { sha256Hex } from "@/lib/security";
+import { parseTranscriptArtifact, withCurrentMarkdownHash } from "@/lib/transcript-artifact";
 import { runTranscriptCleanup, type CleanupProgress, type TranscriptCleanupResult } from "@/lib/transcript-cleanup-ai";
 import { parseCleanupDocument } from "@/lib/transcript-cleanup";
 import { apiError, HttpError, requireApiUser } from "@/lib/user";
@@ -18,6 +19,7 @@ type CleanupPayload = Omit<TranscriptCleanupResult, "document" | "sourceDocument
   beforeHash: string;
   afterHash: string;
   undoAvailable: true;
+  speakerLayoutStale: boolean;
 };
 
 function validHash(value: unknown): value is string {
@@ -156,6 +158,17 @@ async function performCleanup(
       await refundOnce();
       throw safeError(error);
     }
+    let speakerLayoutStale = false;
+    try {
+      const artifact = parseTranscriptArtifact(await readJson(keys.transcriptKey));
+      if (!artifact || artifact.episodeId !== eid || artifact.speakerLayout?.currentMarkdownHash !== beforeHash) {
+        speakerLayoutStale = true;
+      } else {
+        await putJson(keys.transcriptKey, withCurrentMarkdownHash(artifact, afterHash));
+      }
+    } catch {
+      speakerLayoutStale = true;
+    }
     onProgress?.({ stage: "complete", processedBlocks: result.stats.processedBlocks, failedBatchCount: result.failedBatchCount });
     return {
       markdown: result.markdown,
@@ -167,6 +180,7 @@ async function performCleanup(
       provider: result.provider,
       model: result.model,
       undoAvailable: true,
+      speakerLayoutStale,
     };
   } finally {
     try { await releaseAnalysisLease(userId, leaseId); } catch { /* best effort */ }
