@@ -8,6 +8,7 @@ const TARGET_HEADER = "x-xiaoyuzhou-target";
 const TOKEN_HEADER = "x-xiaoyuzhou-token";
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+const MAX_OFFICIAL_RESPONSE_BYTES = 1_000_000_000;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   // Node's fetch transparently decompresses upstream bodies. Do not forward
@@ -117,11 +118,61 @@ export function isAllowedTarget(value) {
   return target;
 }
 
-function isOfficialTarget(target) {
+export function isOfficialTarget(target) {
   const hostname = target.hostname.toLowerCase().replace(/\.+$/, "");
   return hostname === "xiaoyuzhoufm.com" || hostname.endsWith(".xiaoyuzhoufm.com")
     || hostname === "xyzcdn.net" || hostname.endsWith(".xyzcdn.net")
     || hostname === "cloudflare-dns.com" || hostname.endsWith(".cloudflare-dns.com");
+}
+
+function responseChunk(value) {
+  return Buffer.isBuffer(value) ? value : Buffer.from(value);
+}
+
+function waitForDrain(response) {
+  return new Promise((resolve) => response.once("drain", resolve));
+}
+
+export async function streamUpstreamResponse(upstream, response, officialTarget) {
+  if (!officialTarget) {
+    const payload = Buffer.from(await upstream.arrayBuffer());
+    if (payload.length > MAX_RESPONSE_BYTES) {
+      writeJson(response, 502, { error: "RESPONSE_TOO_LARGE" });
+      return;
+    }
+    response.writeHead(upstream.status, responseHeaders(upstream));
+    response.end(payload);
+    return;
+  }
+
+  const contentLength = Number(upstream.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_OFFICIAL_RESPONSE_BYTES) {
+    try { await upstream.body?.cancel(); } catch { /* best effort */ }
+    writeJson(response, 502, { error: "RESPONSE_TOO_LARGE" });
+    return;
+  }
+  response.writeHead(upstream.status, responseHeaders(upstream));
+  if (!upstream.body) {
+    response.end();
+    return;
+  }
+
+  let total = 0;
+  try {
+    for await (const chunk of upstream.body) {
+      const buffer = responseChunk(chunk);
+      total += buffer.length;
+      if (total > MAX_OFFICIAL_RESPONSE_BYTES) {
+        try { await upstream.body.cancel(); } catch { /* best effort */ }
+        response.destroy();
+        return;
+      }
+      if (!response.write(buffer)) await waitForDrain(response);
+    }
+    response.end();
+  } catch {
+    response.destroy();
+  }
 }
 
 async function readBody(request) {
@@ -181,18 +232,11 @@ async function forwardRequest(request, response, token) {
       method: request.method,
       headers: forwardHeaders(request),
       body: body.length && request.method !== "GET" && request.method !== "HEAD" ? body : undefined,
-      // Official Xiaoyuzhou/CDN/DoH requests may follow their normal redirects.
-      // Custom providers stay manual so a response cannot redirect this relay
-      // to a private or otherwise unvalidated destination.
-      redirect: isOfficialTarget(target) ? "follow" : "manual",
+      // Keep every target manual. Official audio redirects are followed by
+      // fetchOfficialAudio after each destination is validated.
+      redirect: "manual",
     });
-    const payload = Buffer.from(await upstream.arrayBuffer());
-    if (payload.length > MAX_RESPONSE_BYTES) {
-      writeJson(response, 502, { error: "RESPONSE_TOO_LARGE" });
-      return;
-    }
-    response.writeHead(upstream.status, responseHeaders(upstream));
-    response.end(payload);
+    await streamUpstreamResponse(upstream, response, isOfficialTarget(target));
   } catch {
     writeJson(response, 502, { error: "UPSTREAM_UNREACHABLE" });
   }
