@@ -18,6 +18,8 @@ export async function GET(_request: Request, context: Context) {
 }
 
 export async function PUT(request: Request, context: Context) {
+  let leaseId: string | null = null;
+  let leaseUserId: string | null = null;
   try {
     const user = await requireApiUser({ mutation: true });
     const { eid } = await context.params;
@@ -29,11 +31,16 @@ export async function PUT(request: Request, context: Context) {
     if (new TextEncoder().encode(markdown).byteLength > 5_000_000) {
       throw new HttpError(413, "DOCUMENT_TOO_LARGE", "文稿超过 5 MB，无法保存");
     }
+    leaseId = await acquireAnalysisLease(user.userId);
+    if (!leaseId) throw new HttpError(409, "ANALYSIS_ALREADY_RUNNING", "AI 任务正在运行，请完成后再保存文稿");
+    leaseUserId = user.userId;
     await putMarkdown(record.current_key, markdown);
     await touchCurrentDocument(user.userId, eid, await sha256Hex(markdown));
     return Response.json({ saved: true, updatedAt: new Date().toISOString() });
   } catch (error) {
     return apiError(error);
+  } finally {
+    if (leaseId && leaseUserId) { try { await releaseAnalysisLease(leaseUserId, leaseId); } catch { /* best effort */ } }
   }
 }
 export async function DELETE(_request: Request, context: Context) {

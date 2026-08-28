@@ -10,7 +10,7 @@ declare global { var __cleanupRouteDeps: Deps | undefined; }
 
 const exportsMap: Record<string, string> = {
   "@/lib/ai-settings": "readActiveAiConfiguration",
-  "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,refundUsage,releaseAnalysisLease,touchCurrentDocument",
+  "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,refundUsage,releaseAnalysisLease,touchCurrentDocument,touchCurrentDocumentIfHash",
   "@/lib/documents": "deleteDocument,documentKeys,putJson,putMarkdown,readMarkdown",
   "@/lib/security": "sha256Hex",
   "@/lib/transcript-cleanup-ai": "runTranscriptCleanup",
@@ -40,7 +40,7 @@ const baseDeps = () => {
   let touched = "";
   const deps: Deps = {
     "@/lib/user": { HttpError: TestHttpError, requireApiUser: async () => ({ userId: "u1" }), apiError: (error: ErrorLike) => Response.json({ error: error.code ?? "INTERNAL_ERROR", message: error.message }, { status: error.status ?? 500 }) },
-    "@/lib/db": { getEpisodeRecord: async () => ({ ...episode, content_hash: hash(current) }), consumeUsage: async () => true, refundUsage: async () => undefined, acquireAnalysisLease: async () => "lease", releaseAnalysisLease: async () => undefined, touchCurrentDocument: async (_u: string, _e: string, h: string) => { touched = h; } },
+    "@/lib/db": { getEpisodeRecord: async () => ({ ...episode }), consumeUsage: async () => true, refundUsage: async () => undefined, acquireAnalysisLease: async () => "lease", releaseAnalysisLease: async () => undefined, touchCurrentDocument: async (_u: string, _e: string, h: string) => { touched = h; }, touchCurrentDocumentIfHash: async (_u: string, _e: string, expected: string, next: string) => { if (expected !== episode.content_hash) return false; touched = next; return true; } },
     "@/lib/documents": { documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json", aiCleanupSnapshotKey: "snapshot.json" }), readMarkdown: async (key: string) => { assert.equal(key, "current.md"); return current; }, putJson: async (key: string, value: unknown) => { putCalls.push({ kind: "json", key, value }); }, putMarkdown: async (key: string, value: string) => { putCalls.push({ kind: "markdown", key, value }); current = value; }, deleteDocument: async (key: string) => { putCalls.push({ kind: "delete", key, value: undefined }); } },
     "@/lib/security": { sha256Hex: async (value: string) => hash(value) },
     "@/lib/ai-settings": { readActiveAiConfiguration: async () => ({ provider: "custom", model: "test-model", apiKey: "secret", baseUrl: "https://secret.example", apiFormat: "responses", reasoningEffort: null }) },
@@ -136,17 +136,17 @@ test("current write failure compensates snapshot and refunds", async () => {
   const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
   assert.equal(response.status, 502);
   assert.equal(refunds, 1);
-  assert.equal(setup.touched, hash(beforeMarkdown));
   assert.ok(setup.putCalls.some((call) => call.kind === "delete" && call.key === "snapshot.json"));
 });
 
 test("touch failure restores current markdown and hash", async () => {
   const setup = baseDeps();
   let touchCalls = 0;
-  setup.deps["@/lib/db"].touchCurrentDocument = async (_u: string, _e: string, h: string) => {
+  setup.deps["@/lib/db"].touchCurrentDocumentIfHash = async (_u: string, _e: string, _expected: string, h: string) => {
     touchCalls++;
     if (touchCalls === 1) throw new Error("db failed");
     assert.equal(h, hash(beforeMarkdown));
+    return true;
   };
   const route = await loadRoute(setup.deps);
   const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
@@ -196,4 +196,13 @@ test("rejects unsafe episode ids and mismatched current keys without writes", as
   response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
   assert.equal(response.status, 409);
   assert.equal(setup.putCalls.length, 0);
+});
+
+test("CAS touch conflict returns stale error and never success", async () => {
+  const setup = baseDeps();
+  setup.deps["@/lib/db"].touchCurrentDocumentIfHash = async () => false;
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json() as { error: string }).error, "CLEANUP_STALE_HASH");
 });

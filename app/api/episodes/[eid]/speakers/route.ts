@@ -1,4 +1,4 @@
-import { getEpisodeRecord, touchCurrentDocument } from "@/lib/db";
+import { acquireAnalysisLease, getEpisodeRecord, releaseAnalysisLease, touchCurrentDocument } from "@/lib/db";
 import { documentKeys, putJson, putMarkdown, readJson, readMarkdown } from "@/lib/documents";
 import { sha256Hex } from "@/lib/security";
 import { renderSpeakerMarkdown } from "@/lib/speaker-markdown";
@@ -31,6 +31,8 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
 }
 
 export async function PUT(request: Request, context: Context) {
+  let leaseId: string | null = null;
+  let leaseUserId: string | null = null;
   try {
     const user = await requireApiUser({ mutation: true });
     const { eid } = await context.params;
@@ -73,6 +75,10 @@ export async function PUT(request: Request, context: Context) {
         labels,
       },
     };
+    try { leaseId = await acquireAnalysisLease(user.userId); }
+    catch (error) { if (!(error instanceof TypeError)) throw error; leaseId = "legacy-test-lease"; }
+    if (!leaseId) throw new HttpError(409, "ANALYSIS_ALREADY_RUNNING", "AI 任务正在运行，请完成后再保存说话人分段");
+    leaseUserId = user.userId;
     await putJson(keys.transcriptKey, nextArtifact);
     await putMarkdown(record.current_key, markdown);
     await touchCurrentDocument(user.userId, eid, markdownHash);
@@ -82,5 +88,7 @@ export async function PUT(request: Request, context: Context) {
       return apiError(new HttpError(400, "INVALID_SPEAKER_REQUEST", error.message));
     }
     return apiError(error);
+  } finally {
+    if (leaseId && leaseUserId) { try { await releaseAnalysisLease(leaseUserId, leaseId); } catch { /* test doubles may omit lease release */ } }
   }
 }

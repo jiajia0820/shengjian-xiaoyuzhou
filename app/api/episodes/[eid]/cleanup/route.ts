@@ -5,7 +5,7 @@ import {
   getEpisodeRecord,
   refundUsage,
   releaseAnalysisLease,
-  touchCurrentDocument,
+  touchCurrentDocumentIfHash,
 } from "@/lib/db";
 import { deleteDocument, documentKeys, putJson, putMarkdown, readMarkdown } from "@/lib/documents";
 import { sha256Hex } from "@/lib/security";
@@ -98,14 +98,22 @@ async function performCleanup(
       snapshotWritten = true;
       currentWriteStarted = true;
       await putMarkdown(record.current_key, result.markdown);
-      await touchCurrentDocument(userId, eid, afterHash);
+      if (!await touchCurrentDocumentIfHash(userId, eid, beforeHash, afterHash)) {
+        throw new HttpError(409, "CLEANUP_STALE_HASH", "处理期间当前文稿已发生变化，请刷新后重试");
+      }
     } catch (error) {
       // Best-effort compensation across object storage and DB; never report success on failure.
       let currentRestored = !currentWriteStarted;
       let hashRestored = !currentWriteStarted;
       if (currentWriteStarted) {
         try { await putMarkdown(record.current_key, markdown); currentRestored = true; } catch { /* retain snapshot for manual recovery */ }
-        try { await touchCurrentDocument(userId, eid, beforeHash); hashRestored = true; } catch { /* best effort */ }
+        try {
+          hashRestored = await touchCurrentDocumentIfHash(userId, eid, afterHash, beforeHash);
+          if (!hashRestored) {
+            const observed = await sha256Hex(await readMarkdown(record.current_key));
+            hashRestored = observed === beforeHash;
+          }
+        } catch { /* best effort */ }
       }
       if (snapshotWritten && currentRestored && hashRestored) {
         try { await deleteDocument(keys.aiCleanupSnapshotKey); } catch { /* retain snapshot for recovery */ }
