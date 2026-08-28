@@ -7,7 +7,7 @@ import {
   releaseAnalysisLease,
   touchCurrentDocumentIfHash,
 } from "@/lib/db";
-import { deleteDocument, documentKeys, putJson, putMarkdown, readMarkdown } from "@/lib/documents";
+import { deleteDocument, documentKeys, putJson, putMarkdown, putMarkdownIfEtag, readMarkdown, readMarkdownWithEtag } from "@/lib/documents";
 import { sha256Hex } from "@/lib/security";
 import { runTranscriptCleanup, type CleanupProgress, type TranscriptCleanupResult } from "@/lib/transcript-cleanup-ai";
 import { parseCleanupDocument } from "@/lib/transcript-cleanup";
@@ -44,7 +44,9 @@ async function performCleanup(
   if (record.current_key !== keys.currentKey) {
     throw new HttpError(409, "CLEANUP_DOCUMENT_KEY_MISMATCH", "当前文稿存储位置无效，请刷新后重试");
   }
-  const markdown = await readMarkdown(record.current_key);
+  const currentObject = await readMarkdownWithEtag(record.current_key);
+  const markdown = currentObject.markdown;
+  if (!currentObject.etag) throw new HttpError(409, "CLEANUP_DOCUMENT_CHANGED", "当前文稿版本不可验证，请刷新后重试");
   if (new TextEncoder().encode(markdown).byteLength > 5_000_000 || Array.from(markdown).length > 400_000) {
     throw new HttpError(413, "CLEANUP_DOCUMENT_TOO_LARGE", "文稿超过清理上限");
   }
@@ -110,7 +112,10 @@ async function performCleanup(
       await putJson(keys.aiCleanupSnapshotKey, snapshot);
       snapshotWritten = true;
       currentWriteStarted = true;
-      await putMarkdown(record.current_key, result.markdown);
+      if (!await putMarkdownIfEtag(record.current_key, result.markdown, currentObject.etag)) {
+        casConflict = true;
+        throw new HttpError(409, "CLEANUP_STALE_HASH", "处理期间当前文稿已发生变化，请刷新后重试");
+      }
       if (!await touchCurrentDocumentIfHash(userId, eid, beforeHash, afterHash)) {
         casConflict = true;
         throw new HttpError(409, "CLEANUP_STALE_HASH", "处理期间当前文稿已发生变化，请刷新后重试");
