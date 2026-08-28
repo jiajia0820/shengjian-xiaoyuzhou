@@ -293,6 +293,14 @@ export default function Workspace({
         responseJson<{ results: AnalysisResult[] }>(await apiFetch(`/api/episodes/${episode.eid}/analyses`, { cache: "no-store" })),
       ]);
       setMarkdown(documentData.markdown);
+      try {
+        const cleanupStatus = await responseJson<{ undoAvailable: boolean }>(
+          await apiFetch(`/api/episodes/${episode.eid}/cleanup`, { cache: "no-store" }),
+        );
+        setCleanupUndoAvailable(Boolean(cleanupStatus.undoAvailable));
+      } catch {
+        setCleanupUndoAvailable(false);
+      }
       setAnalysisResults(analysisData.results);
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "读取文稿失败" });
@@ -386,7 +394,6 @@ export default function Workspace({
       setCleanupStats(result.stats);
       setCleanupUndoAvailable(result.undoAvailable !== false);
       setSpeakerLayoutStale(Boolean(result.speakerLayoutStale));
-      setEditorMode("preview");
       try { await loadEpisodes(); } catch { /* 尽力刷新列表；不影响已成功的清理结果 */ }
       setNotice({ kind: "success", text: "AI 清理完成，已保留撤销快照" });
     } catch (error) {
@@ -423,7 +430,6 @@ export default function Workspace({
       setCleanupStats(null);
       setCleanupUndoAvailable(false);
       setSpeakerLayoutStale(false);
-      setEditorMode("preview");
       try { await loadEpisodes(); } catch { /* 尽力刷新列表；不影响已成功的撤销结果 */ }
       setNotice({ kind: "success", text: "已撤销 AI 清理，恢复清理前的编辑稿" });
     } catch (error) {

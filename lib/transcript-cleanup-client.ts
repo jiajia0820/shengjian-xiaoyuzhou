@@ -45,7 +45,8 @@ export function parseCleanupEventData(data: string): CleanupProgress | null {
 
 export function cleanupProgressLabel(progress: CleanupProgress): string {
   const stage = progress.stage;
-  const batch = progress.batchIndex && progress.batchCount ? ` · 第 ${progress.batchIndex}/${progress.batchCount} 批` : "";
+  const batch = typeof progress.batchIndex === "number" && typeof progress.batchCount === "number"
+    ? ` · 第 ${progress.batchIndex + 1}/${progress.batchCount} 批` : "";
   if (stage === "parsing") return `正在解析文稿${batch}`;
   if (stage === "processing") return `AI 正在清理${batch}`;
   if (stage === "saving") return "正在保存清理结果…";
@@ -63,6 +64,7 @@ export async function consumeCleanupResponse(
   }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!contentType.includes("text/event-stream") || !response.body) {
+    onProgress({ stage: "processing" });
     const payload = await response.json() as CleanupPayload;
     return payload;
   }

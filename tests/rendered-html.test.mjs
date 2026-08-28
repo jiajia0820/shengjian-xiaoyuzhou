@@ -77,7 +77,10 @@ test("wires a local-only speaker review panel into the transcript toolbar", asyn
 });
 
 test("wires AI transcript cleanup controls and hash-protected requests", async () => {
-  const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
+  const [workspace, cleanupRoute] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/episodes/[eid]/cleanup/route.ts", import.meta.url), "utf8"),
+  ]);
   assert.match(workspace, /AI 清理文稿/);
   assert.match(workspace, /撤销 AI 清理/);
   assert.match(workspace, /cleanupProcessing/);
@@ -91,6 +94,13 @@ test("wires AI transcript cleanup controls and hash-protected requests", async (
   assert.match(workspace, /setMarkdown\(result\.markdown\)/);
   assert.match(workspace, /setCleanupStats\(result\.stats\)/);
   assert.match(workspace, /setCleanupUndoAvailable\(result\.undoAvailable/);
+  const cleanupBody = workspace.match(/async function cleanupTranscript\(\) \{([\s\S]*?)\n\s+\}/)?.[1] ?? "";
+  const undoBody = workspace.match(/async function undoCleanup\(\) \{([\s\S]*?)\n\s+\}/)?.[1] ?? "";
+  assert.doesNotMatch(cleanupBody, /setEditorMode\(\s*"preview"\s*\)/);
+  assert.doesNotMatch(undoBody, /setEditorMode\(\s*"preview"\s*\)/);
+  assert.match(workspace, /cleanupUndoAvailable[\s\S]*cleanup`|cleanup`[\s\S]*cleanupUndoAvailable/);
+  assert.match(cleanupRoute, /export async function GET/);
+  assert.match(cleanupRoute, /undoAvailable/);
   assert.match(workspace, /if \(!aiSettings\.defaultProvider\)/);
   assert.match(workspace, /setAiModalOpen\(true\)/);
   assert.match(workspace, /setCleanupProcessing\(true\);[\s\S]*cleanup\/undo/);

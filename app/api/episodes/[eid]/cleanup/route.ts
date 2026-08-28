@@ -31,6 +31,30 @@ function safeError(error: unknown): HttpError {
   return new HttpError(502, "CLEANUP_PROVIDER_ERROR", "AI 清理服务暂时不可用，请稍后重试");
 }
 
+export async function GET(_request: Request, context: Context) {
+  try {
+    const user = await requireApiUser();
+    const { eid } = await context.params;
+    if (!/^[A-Za-z0-9_-]{1,180}$/.test(eid)) throw new HttpError(400, "INVALID_EPISODE_ID", "文稿标识无效");
+    const keys = await documentKeys(user.userId, eid);
+    const record = await getEpisodeRecord(user.userId, eid);
+    if (!record) throw new HttpError(404, "EPISODE_NOT_FOUND", "没有找到这篇文稿");
+    if (record.current_key !== keys.currentKey) throw new HttpError(409, "CLEANUP_DOCUMENT_KEY_MISMATCH", "当前文稿存储位置无效，请刷新后重试");
+    let snapshot: unknown;
+    try { snapshot = JSON.parse(await readJson(keys.aiCleanupSnapshotKey)); } catch { return Response.json({ undoAvailable: false }); }
+    if (!snapshot || typeof snapshot !== "object") return Response.json({ undoAvailable: false });
+    const value = snapshot as Record<string, unknown>;
+    if (value.schemaVersion !== 1 || value.episodeId !== eid || !validHash(value.afterHash)) return Response.json({ undoAvailable: false });
+    let current;
+    try { current = await readMarkdownWithEtag(record.current_key); } catch { return Response.json({ undoAvailable: false }); }
+    if (!current.etag) return Response.json({ undoAvailable: false });
+    const currentHash = (await sha256Hex(current.markdown)).toLowerCase();
+    return Response.json({ undoAvailable: currentHash === String(value.afterHash).toLowerCase() });
+  } catch (error) {
+    return apiError(safeError(error));
+  }
+}
+
 async function performCleanup(
   userId: string,
   eid: string,
