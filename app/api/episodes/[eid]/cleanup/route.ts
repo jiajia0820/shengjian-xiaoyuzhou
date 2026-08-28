@@ -74,12 +74,14 @@ async function performCleanup(
     throw new HttpError(409, "ANALYSIS_ALREADY_RUNNING", "当前账号已有一个 AI 任务正在运行，请等待完成");
   }
   try {
+    let refunded = false;
+    const refundOnce = async () => { if (!refunded) { refunded = true; await refundUsage(userId, "ai"); } };
     let result: TranscriptCleanupResult;
     try {
       const config = await readActiveAiConfiguration(userId);
       result = await runTranscriptCleanup({ markdown, config, onProgress });
     } catch (error) {
-      await refundUsage(userId, "ai");
+      await refundOnce();
       throw safeError(error);
     }
     const blockCount = result.document.blocks.length;
@@ -87,18 +89,20 @@ async function performCleanup(
       || result.stats.unprocessedBlocks >= blockCount;
     if ((blockCount > 0 && result.stats.processedBlocks === 0 && allBlocksRejected)
       || result.failedBatchCount >= blockCount) {
-      await refundUsage(userId, "ai");
+      await refundOnce();
       throw new HttpError(502, "CLEANUP_PROVIDER_FAILED", "AI 清理未能处理任何段落，请稍后重试");
     }
-    const latestMarkdown = await readMarkdown(record.current_key);
-    const latestHash = await sha256Hex(latestMarkdown);
+    let latestMarkdown: string;
+    let latestHash: string;
+    try { latestMarkdown = await readMarkdown(record.current_key); latestHash = await sha256Hex(latestMarkdown); }
+    catch (error) { await refundOnce(); throw safeError(error); }
     if (latestHash !== beforeHash) {
-      await refundUsage(userId, "ai");
+      await refundOnce();
       throw new HttpError(409, "CLEANUP_STALE_HASH", "处理期间当前文稿已发生变化，请刷新后重试");
     }
     const afterHash = await sha256Hex(result.markdown);
     if (new TextEncoder().encode(result.markdown).byteLength > 5_000_000 || Array.from(result.markdown).length > 400_000) {
-      await refundUsage(userId, "ai");
+      await refundOnce();
       throw new HttpError(413, "CLEANUP_DOCUMENT_TOO_LARGE", "清理结果超过文稿上限");
     }
     const snapshot = {
@@ -145,7 +149,7 @@ async function performCleanup(
       if (snapshotWritten && currentRestored && hashRestored) {
         try { await deleteDocument(keys.aiCleanupSnapshotKey); } catch { /* retain snapshot for recovery */ }
       }
-      await refundUsage(userId, "ai");
+      await refundOnce();
       throw safeError(error);
     }
     onProgress?.({ stage: "complete", processedBlocks: result.stats.processedBlocks, failedBatchCount: result.failedBatchCount });
