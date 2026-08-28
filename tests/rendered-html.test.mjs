@@ -43,7 +43,7 @@ test("stores a transcript.json sidecar beside each episode document", async () =
   assert.match(documents, /transcriptKey: `\$\{base\}\/transcript\.json`/);
 });
 
-test("wires a local-only speaker review panel into the transcript toolbar", async () => {
+test("wires a remote episode-audio speaker review panel into the transcript toolbar", async () => {
   const [workspace, panel, client, styles] = await Promise.all([
     readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/speaker-diarization-panel.tsx", import.meta.url), "utf8"),
@@ -51,8 +51,10 @@ test("wires a local-only speaker review panel into the transcript toolbar", asyn
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   assert.match(workspace, /SpeakerDiarizationPanel/);
-  assert.match(panel, /从本地音频识别说话人/);
-  assert.match(panel, /aria-label="选择本地音频"/);
+  assert.match(panel, /audio-source/);
+  assert.match(panel, /sourceUrl/);
+  assert.match(panel, /fallbackUrl/);
+  assert.match(panel, /正在获取小宇宙官方音频/);
   assert.match(panel, /\/speakers\/preview/);
   assert.match(panel, /\/speakers`/);
   assert.match(panel, /const \[turns, setTurns\] = useState<LocalSpeakerTurn\[\]>\(\[\]\)/);
@@ -67,7 +69,9 @@ test("wires a local-only speaker review panel into the transcript toolbar", asyn
   assert.match(panel, /validateVoiceprintReferences/);
   assert.match(panel, /mode: "voiceprint"/);
   assert.match(panel, /references/);
-  assert.match(panel, /URL\.revokeObjectURL/);
+  assert.doesNotMatch(panel, /<input[^>]+type="file"/);
+  assert.doesNotMatch(panel, /选择本地音频/);
+  assert.doesNotMatch(panel, /AUDIO_ACCEPT/);
   assert.match(styles, /\.speaker-diarization-modal\s*\{[^}]*max-height:/);
   assert.match(styles, /\.speaker-review-list\s*\{[^}]*overflow-y:\s*auto/);
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.speaker-label-grid/);
@@ -134,6 +138,26 @@ test("documents the two-speaker voiceprint workflow and fallback", async () => {
     assert.match(content, /本机处理/);
     assert.match(content, /全自动/);
   }
+});
+
+test("documents the remote official episode-audio workflow", async () => {
+  const [rootReadme, localReadme, spec] = await Promise.all([
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+    readFile(new URL("../local-audio-service/README.md", import.meta.url), "utf8"),
+    readFile(new URL("../docs/superpowers/specs/2026-08-28-remote-episode-audio-design.md", import.meta.url), "utf8"),
+  ]);
+  for (const content of [rootReadme, localReadme]) {
+    assert.match(content, /打开已有小宇宙单集[\s\S]*官方音频/);
+    assert.match(content, /本机流式下载/);
+    assert.match(content, /默认直连[\s\S]*短时 relay/);
+    assert.match(content, /不保存永久音频/);
+    assert.match(content, /2 小时[\s\S]*1GB/);
+    assert.match(content, /5[–-]30 秒/);
+    assert.match(content, /有权处理该音频/);
+    assert.doesNotMatch(content, /必须选择本地音频/);
+  }
+  assert.match(spec, /官方媒体流式转发/);
+  assert.match(spec, /不能使用 32MB JSON 缓冲/);
 });
 
 test("selects CUDA packages when an NVIDIA GPU is available", async () => {

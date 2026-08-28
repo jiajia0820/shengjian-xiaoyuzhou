@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/auth-client";
 import {
   cancelLocalSpeakerJob,
@@ -10,6 +10,7 @@ import {
   localSpeakerErrorMessage,
   type LocalSpeakerMode,
   type LocalSpeakerTurn,
+  type RemoteSpeakerAudioSource,
 } from "@/lib/local-speaker-client";
 import {
   VOICEPRINT_LABELS,
@@ -18,7 +19,7 @@ import {
 } from "@/lib/voiceprint";
 
 type Notice = { kind: "success" | "error" | "info"; text: string };
-type Phase = "idle" | "validating" | "uploading" | "diarizing" | "reviewing" | "saving";
+type Phase = "idle" | "fetching" | "validating" | "uploading" | "diarizing" | "reviewing" | "saving";
 type SpeakerLabel = { id: string; label: string };
 type ReviewSegment = {
   startMs: number;
@@ -29,13 +30,18 @@ type ReviewSegment = {
   speakerNeedsReview: boolean;
 };
 type Preview = { segments: ReviewSegment[]; labels: SpeakerLabel[]; markdown: string; reviewCount: number };
+type AudioSource = {
+  audioUrl: string;
+  relayUrl: string;
+  mimeType: string | null;
+  durationSeconds: number | null;
+  expiresAt: string;
+};
 type ReferenceSpeakerId = keyof VoiceprintReferences;
 type ReferenceInput = { start: string; end: string };
 type ReferenceInputs = Record<ReferenceSpeakerId, ReferenceInput>;
 
-const MAX_BYTES = 1 * 1024 * 1024 * 1024;
 const MAX_DURATION_SECONDS = 2 * 60 * 60;
-const AUDIO_ACCEPT = ".mp3,.m4a,.wav,.flac,.ogg,.mp4,.webm";
 const DEFAULT_REFERENCE_INPUTS: ReferenceInputs = {
   speaker_0: { start: "", end: "" },
   speaker_1: { start: "", end: "" },
@@ -48,9 +54,10 @@ function formatTime(milliseconds: number): string {
 
 function phaseLabel(phase: Phase): string {
   return {
-    idle: "选择本地音频后开始",
-    validating: "正在检查本地音频…",
-    uploading: "正在发送到本机服务…",
+    idle: "官方音频已就绪，可开始识别",
+    fetching: "正在获取小宇宙官方音频…",
+    validating: "正在检查官方音频…",
+    uploading: "正在交给本机服务…",
     diarizing: "本机正在识别说话人…",
     reviewing: "请检查并修正说话人归属",
     saving: "正在保存说话人分段…",
@@ -77,6 +84,25 @@ async function responseJson<T>(response: Response): Promise<T> {
   return data;
 }
 
+function parseAudioSource(value: unknown): AudioSource {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("官方音频获取失败，可重试");
+  const record = value as Record<string, unknown>;
+  if (typeof record.audioUrl !== "string" || !record.audioUrl
+    || typeof record.relayUrl !== "string" || !record.relayUrl
+    || (record.mimeType !== null && typeof record.mimeType !== "string")
+    || (record.durationSeconds !== null && (typeof record.durationSeconds !== "number" || !Number.isFinite(record.durationSeconds) || record.durationSeconds <= 0))
+    || typeof record.expiresAt !== "string" || !record.expiresAt) {
+    throw new Error("官方音频获取失败，可重试");
+  }
+  return {
+    audioUrl: record.audioUrl,
+    relayUrl: record.relayUrl,
+    mimeType: record.mimeType as string | null,
+    durationSeconds: record.durationSeconds as number | null,
+    expiresAt: record.expiresAt,
+  };
+}
+
 export function SpeakerDiarizationPanel({
   episode,
   onSaved,
@@ -91,9 +117,10 @@ export function SpeakerDiarizationPanel({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [audioDurationMs, setAudioDurationMs] = useState<number | null>(null);
+  const [audioSource, setAudioSource] = useState<AudioSource | null>(null);
+  const [audioDurationMs, setAudioDurationMs] = useState<number | null>(
+    episode.durationSeconds && episode.durationSeconds > 0 ? Math.round(episode.durationSeconds * 1000) : null,
+  );
   const [mode, setMode] = useState<LocalSpeakerMode>("diarization");
   const [expectedSpeakers, setExpectedSpeakers] = useState<number | null>(null);
   const [referenceInputs, setReferenceInputs] = useState<ReferenceInputs>(DEFAULT_REFERENCE_INPUTS);
@@ -109,35 +136,56 @@ export function SpeakerDiarizationPanel({
   const [error, setError] = useState<string | null>(null);
   const jobIdRef = useRef<string | null>(null);
   const cancelledRef = useRef(false);
-  const audioUrlRef = useRef<string | null>(null);
 
-  const busy = ["validating", "uploading", "diarizing", "saving"].includes(phase);
+  const busy = ["fetching", "validating", "uploading", "diarizing", "saving"].includes(phase);
   const speakerEngine = mode === "voiceprint"
     ? "pyannote-wespeaker-voiceprint-v1" as const
     : "pyannote-community-1" as const;
 
-  useEffect(() => () => {
-    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-    audioUrlRef.current = null;
-  }, []);
-
-  function updatePhase(next: Phase) {
+  const updatePhase = useCallback((next: Phase) => {
     setPhase(next);
-    onBusyChange?.(["validating", "uploading", "diarizing", "saving"].includes(next));
-  }
+    onBusyChange?.(["fetching", "validating", "uploading", "diarizing", "saving"].includes(next));
+  }, [onBusyChange]);
 
-  function releaseAudioUrl() {
-    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-    audioUrlRef.current = null;
-    setAudioUrl(null);
-    setAudioDurationMs(null);
+  const fetchAudioSource = useCallback(async (): Promise<AudioSource | null> => {
+    setError(null);
+    updatePhase("fetching");
+    try {
+      const source = parseAudioSource(await responseJson<unknown>(await apiFetch(`/api/episodes/${episode.eid}/audio-source`, { cache: "no-store" })));
+      setAudioSource(source);
+      setAudioDurationMs(source.durationSeconds && source.durationSeconds > 0
+        ? Math.round(source.durationSeconds * 1000)
+        : episode.durationSeconds && episode.durationSeconds > 0 ? Math.round(episode.durationSeconds * 1000) : null);
+      updatePhase("idle");
+      return source;
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "官方音频获取失败，可重试";
+      setAudioSource(null);
+      setError(message);
+      reportNotice({ kind: "error", text: message });
+      updatePhase("idle");
+      return null;
+    }
+  }, [episode.eid, episode.durationSeconds, reportNotice, updatePhase]);
+
+  useEffect(() => {
+    if (!open) return;
+    void fetchAudioSource();
+  }, [fetchAudioSource, open]);
+
+  function updateReference(speakerId: ReferenceSpeakerId, field: "start" | "end", value: string) {
+    setReferenceInputs((current) => ({
+      ...current,
+      [speakerId]: { ...current[speakerId], [field]: value },
+    }));
+    setError(null);
   }
 
   function reset() {
     jobIdRef.current = null;
     cancelledRef.current = false;
-    releaseAudioUrl();
-    setFile(null);
+    setAudioSource(null);
+    setAudioDurationMs(episode.durationSeconds && episode.durationSeconds > 0 ? Math.round(episode.durationSeconds * 1000) : null);
     setMode("diarization");
     setExpectedSpeakers(null);
     setReferenceInputs(DEFAULT_REFERENCE_INPUTS);
@@ -150,26 +198,6 @@ export function SpeakerDiarizationPanel({
     setChunkCount(0);
     setError(null);
     updatePhase("idle");
-  }
-
-  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const nextFile = event.target.files?.[0] ?? null;
-    releaseAudioUrl();
-    setFile(nextFile);
-    setError(null);
-    if (nextFile) {
-      const nextUrl = URL.createObjectURL(nextFile);
-      audioUrlRef.current = nextUrl;
-      setAudioUrl(nextUrl);
-    }
-  }
-
-  function updateReference(speakerId: ReferenceSpeakerId, field: "start" | "end", value: string) {
-    setReferenceInputs((current) => ({
-      ...current,
-      [speakerId]: { ...current[speakerId], [field]: value },
-    }));
-    setError(null);
   }
 
   async function close() {
@@ -201,8 +229,12 @@ export function SpeakerDiarizationPanel({
   }
 
   async function start() {
-    if (!file) {
-      setError("请先选择本地音频文件");
+    let source = audioSource;
+    if (!source || (Date.parse(source.expiresAt) > 0 && Date.parse(source.expiresAt) <= Date.now() + 5_000)) {
+      source = await fetchAudioSource();
+    }
+    if (!source) {
+      setError("正在获取小宇宙官方音频，请稍后重试");
       return;
     }
     setError(null);
@@ -210,7 +242,6 @@ export function SpeakerDiarizationPanel({
     cancelledRef.current = false;
     try {
       updatePhase("validating");
-      if (file.size > MAX_BYTES) throw new Error("音频超过 1GB，未开始处理");
       if (audioDurationMs !== null && audioDurationMs > MAX_DURATION_SECONDS * 1000) {
         throw new Error("音频超过 2 小时，未开始处理");
       }
@@ -233,9 +264,10 @@ export function SpeakerDiarizationPanel({
       }
 
       updatePhase("uploading");
+      const sourceInput: RemoteSpeakerAudioSource = { sourceUrl: source.audioUrl, fallbackUrl: source.relayUrl };
       const job = mode === "voiceprint"
-        ? await createLocalSpeakerJob(file, { mode: "voiceprint", references: references as VoiceprintReferences })
-        : await createLocalSpeakerJob(file, { mode: "diarization", expectedSpeakers });
+        ? await createLocalSpeakerJob(sourceInput, { mode: "voiceprint", references: references as VoiceprintReferences })
+        : await createLocalSpeakerJob(sourceInput, { mode: "diarization", expectedSpeakers });
       jobIdRef.current = job.jobId;
       updatePhase("diarizing");
       for (;;) {
@@ -293,28 +325,27 @@ export function SpeakerDiarizationPanel({
     .filter(({ segment }) => showAll || segment.speakerNeedsReview) ?? [];
 
   return <>
-    <button type="button" disabled={disabled} onClick={() => setOpen(true)}>从本地音频识别说话人</button>
+    <button type="button" disabled={disabled} onClick={() => setOpen(true)}>按单集官方音频识别说话人</button>
     {open && <div className="modal-backdrop speaker-diarization-backdrop">
       <section className="connect-modal speaker-diarization-modal" role="dialog" aria-modal="true" aria-labelledby="speaker-diarization-title">
         <button className="modal-close" type="button" disabled={disabled || busy} onClick={() => void close()} aria-label="关闭说话人识别">×</button>
         <p className="modal-kicker">LOCAL · EXPERIMENTAL</p>
         <h2 id="speaker-diarization-title">按说话人分段</h2>
-        <p>音频只发送到你电脑上的本地服务，不会上传到声笺服务器。系统不会改写官方正文。</p>
+        <p>系统从当前小宇宙单集获取官方音频，默认直连 CDN 到你电脑上的本地服务；直连失败时才使用短时中转。音频不会上传到声笺服务器，只在本机临时处理，系统不会改写官方正文。</p>
 
         {!preview ? <div className="speaker-upload-form">
-          <label>选择本地音频
-            <input aria-label="选择本地音频" type="file" accept={AUDIO_ACCEPT} disabled={disabled || busy} onChange={handleFileChange} />
-          </label>
-          {file && <small>{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB</small>}
-          {file && audioUrl && <div className="speaker-audio">
-            <audio controls preload="metadata" src={audioUrl}
+          {audioSource ? <div className="speaker-audio">
+            <audio controls preload="metadata" src={audioSource.audioUrl}
               onLoadedMetadata={(event) => {
                 const duration = event.currentTarget.duration;
                 if (Number.isFinite(duration) && duration > 0) setAudioDurationMs(Math.round(duration * 1000));
               }}
-              onError={() => setError("浏览器无法读取音频时长；本地服务仍会再次检查")}
+              onError={() => setError("浏览器无法读取官方音频；可重新获取音频后再试")}
             ><track kind="captions" /></audio>
             <small>{audioDurationMs ? `音频时长：${formatTime(audioDurationMs)}` : "正在读取音频时长…"}</small>
+          </div> : <div className="speaker-source-state" aria-live="polite">
+            <p>{phase === "fetching" ? "正在获取小宇宙官方音频…" : "暂时没有获取到官方音频"}</p>
+            {phase !== "fetching" && <button type="button" onClick={() => void fetchAudioSource()}>重新获取官方音频</button>}
           </div>}
           <label>识别模式
             <select aria-label="识别模式" value={mode} disabled={disabled || busy} onChange={(event) => setMode(event.target.value as LocalSpeakerMode)}>
@@ -350,8 +381,8 @@ export function SpeakerDiarizationPanel({
           <div className="speaker-progress" aria-live="polite">{phaseLabel(phase)}{phase === "diarizing" && ` ${progress}%`}{phase === "diarizing" && chunkCount > 0 && ` · 第 ${chunkIndex}/${chunkCount} 块`}</div>
           {error && <p className="speaker-error" role="alert">{error}</p>}
           <div className="speaker-modal-actions">
-            {busy ? <button type="button" className="danger-button" onClick={() => void close()}>取消本地任务</button>
-              : <button type="button" className="save-button" disabled={disabled} onClick={() => void start()}>开始识别</button>}
+            {busy && jobIdRef.current ? <button type="button" className="danger-button" onClick={() => void close()}>取消本地任务</button>
+              : <button type="button" className="save-button" disabled={disabled || busy || !audioSource} onClick={() => void start()}>开始识别</button>}
           </div>
         </div> : <div className="speaker-review" aria-live="polite">
           <p>已完成对齐。{preview.reviewCount ? `${preview.reviewCount} 段需要你确认。` : "你仍可检查和修改归属。"}</p>
@@ -379,7 +410,7 @@ export function SpeakerDiarizationPanel({
             </div>)}
           </div>
           {error && <p className="speaker-error" role="alert">{error}</p>}
-          <p className="speaker-save-warning">音频不会上传，保存后将覆盖当前编辑稿。</p>
+          <p className="speaker-save-warning">音频不会上传，只在本机临时处理；保存后将覆盖当前编辑稿。</p>
           <div className="speaker-modal-actions">
             <button type="button" onClick={() => void close()} disabled={disabled || phase === "saving"}>取消</button>
             <button className="save-button" type="button" onClick={() => void save()} disabled={disabled || phase === "saving"}>{phase === "saving" ? "保存中…" : "保存为当前稿"}</button>

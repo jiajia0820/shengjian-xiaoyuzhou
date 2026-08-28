@@ -9,7 +9,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --experimental-strip-types --test tests/core.test.ts tests/rendered-html.test.mjs tests/transcript-artifact.test.ts tests/transcript-speakers.test.ts tests/speaker-markdown.test.ts tests/local-speaker-client.test.ts tests/local-dev-env.test.ts tests/voiceprint.test.ts tests/transcript-cleanup.test.ts tests/transcript-cleanup-ai.test.ts tests/transcript-cleanup-client.test.ts tests/transcript-cleanup-routes.test.ts",
+    "test": "npm run build && node --experimental-strip-types --test tests/core.test.ts tests/rendered-html.test.mjs tests/audio-relay-ticket.test.ts tests/audio-source-routes.test.ts tests/dev-upstream-proxy.test.mjs tests/transcript-artifact.test.ts tests/transcript-speakers.test.ts tests/speaker-markdown.test.ts tests/local-speaker-client.test.ts tests/local-dev-env.test.ts tests/voiceprint.test.ts tests/transcript-cleanup.test.ts tests/transcript-cleanup-ai.test.ts tests/transcript-cleanup-client.test.ts tests/transcript-cleanup-routes.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
