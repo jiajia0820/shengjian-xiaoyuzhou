@@ -52,7 +52,7 @@ function lineRecords(value: string): Array<{ text: string; start: number; end: n
 
 function trimBodySpan(source: string, start: number, end: number): Span {
   let bodyStart = start;
-  while (bodyStart < end && (source[bodyStart] === " " || source[bodyStart] === "\t")) bodyStart++;
+  while (bodyStart < end && /\s/.test(source[bodyStart])) bodyStart++;
   let bodyEnd = end;
   while (bodyEnd > bodyStart && (source[bodyEnd - 1] === "\n" || source[bodyEnd - 1] === "\r")) bodyEnd--;
   while (bodyEnd > bodyStart && (source[bodyEnd - 1] === " " || source[bodyEnd - 1] === "\t")) bodyEnd--;
@@ -77,7 +77,7 @@ export function parseCleanupDocument(markdown: string): CleanupDocument {
     }
   }
 
-  type Event = { kind: "heading" | "timestamp"; start: number; end: number; label?: string; timestamp?: string; contentStart?: number };
+  type Event = { kind: "heading" | "timestamp"; start: number; end: number; label?: string; timestampText?: string };
   const events: Event[] = [];
   let speakerLabel: string | null = null;
   for (let index = officialLine + 1; index < lines.length; index++) {
@@ -94,37 +94,25 @@ export function parseCleanupDocument(markdown: string): CleanupDocument {
     while ((match = TIMESTAMP.exec(line.text)) !== null) {
       const absoluteStart = line.start + match.index;
       const absoluteEnd = absoluteStart + match[0].length;
-      events.push({
-        kind: "timestamp",
-        start: absoluteStart,
-        end: absoluteEnd,
-        timestamp: match[1],
-        contentStart: absoluteEnd,
-        label: speakerLabel ?? undefined,
-      });
+      events.push({ kind: "timestamp", start: absoluteStart, end: absoluteEnd, timestampText: match[0] });
     }
   }
 
   const blocks: CleanupBlock[] = [];
   const spans: Span[] = [];
   let currentLabel: string | null = null;
-  const timestamps = events.filter((event) => event.kind === "timestamp");
-  for (let index = 0; index < timestamps.length; index++) {
-    const event = timestamps[index];
-    for (const candidate of events) {
-      if (candidate.start <= event.start && candidate.kind === "heading") currentLabel = candidate.label ?? null;
-    }
-    const nextTimestamp = timestamps[index + 1];
-    const nextHeading = events.find((candidate) => candidate.kind === "heading" && candidate.start > event.end && (!nextTimestamp || candidate.start < nextTimestamp.start));
-    const rawEnd = Math.min(nextTimestamp?.start ?? regionEnd, nextHeading?.start ?? regionEnd, regionEnd);
-    const span = trimBodySpan(markdown, event.contentStart ?? event.end, rawEnd);
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
+    if (event.kind === "heading") currentLabel = event.label ?? null;
+    const rawEnd = Math.min(events[index + 1]?.start ?? regionEnd, regionEnd);
+    const span = trimBodySpan(markdown, event.end, rawEnd);
     const text = markdown.slice(span.start, span.end);
     if (!text.trim()) continue;
     spans.push(span);
     blocks.push({
       id: `seg-${String(blocks.length + 1).padStart(6, "0")}`,
       speakerLabel: currentLabel,
-      timestampText: event.timestamp ?? null,
+      timestampText: event.kind === "timestamp" ? event.timestampText ?? null : null,
       text,
       ordinal: blocks.length,
     });
@@ -164,7 +152,7 @@ export function splitCleanupBlocks(blocks: readonly CleanupBlock[], maxChars: nu
   let current: CleanupBlock[] = [];
   let length = 0;
   for (const block of blocks) {
-    const size = block.text.length;
+    const size = Array.from(block.text).length;
     if (current.length && length + size > maxChars) {
       chunks.push(current);
       current = [];
@@ -225,6 +213,16 @@ export function parseCleanupModelResult(value: string): CleanupModelResult {
 
 function nonWhitespaceLength(value: string): number { return value.replace(/\s/g, "").length; }
 
+function applyDeclaredChanges(original: string, changes: readonly CleanupChange[]): string | null {
+  let value = original;
+  for (const change of changes) {
+    if (!change.from || value.indexOf(change.from) < 0) return null;
+    const index = value.indexOf(change.from);
+    value = `${value.slice(0, index)}${change.to}${value.slice(index + change.from.length)}`;
+  }
+  return value;
+}
+
 export function validateCleanupModelResult(document: CleanupDocument, result: CleanupModelResult, allowedIds?: ReadonlySet<string>): { replacements: Map<string, string>; changes: CleanupChange[]; rejectedIds: string[] } {
   const expected = allowedIds ?? new Set(document.blocks.map((block) => block.id));
   const actual = new Set<string>();
@@ -243,6 +241,9 @@ export function validateCleanupModelResult(document: CleanupDocument, result: Cl
     const block = blocks.get(segment.id);
     if (!block) { rejectedIds.push(segment.id); continue; }
     if (!segment.text.trim()) { rejectedIds.push(segment.id); continue; }
+    if (segment.text !== block.text && !segment.changes.length) { rejectedIds.push(segment.id); continue; }
+    const declaredText = applyDeclaredChanges(block.text, segment.changes);
+    if (declaredText === null || (segment.text !== block.text && declaredText !== segment.text)) { rejectedIds.push(segment.id); continue; }
     const unsafe = hasUnsafeMarker(segment.text) || segment.changes.some((change) => hasUnsafeMarker(change.from) || hasUnsafeMarker(change.to));
     const lowTypo = segment.changes.some((change) => change.type === "typo" && change.confidence < 0.9);
     const removalOnly = segment.changes.length > 0 && segment.changes.every((change) =>

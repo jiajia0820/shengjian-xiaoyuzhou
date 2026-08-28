@@ -45,21 +45,21 @@ test("解析第一个官方文稿区域中的说话人、时间戳和多行正�
     {
       id: "seg-000001",
       speakerLabel: "主播",
-      timestampText: "00:00:01",
+      timestampText: "[00:00:01]",
       text: "大家好，今天我们聊聊天气。\n这是第二行，仍然属于主播。",
       ordinal: 0,
     },
     {
       id: "seg-000002",
       speakerLabel: "主播",
-      timestampText: "00:00:08",
+      timestampText: "[00:00:08]",
       text: "嘉宾说：我觉得不错。\n这是嘉宾的补充。",
       ordinal: 1,
     },
     {
       id: "seg-000003",
       speakerLabel: "嘉宾",
-      timestampText: "00:00:15",
+      timestampText: "[00:00:15]",
       text: "最后一段内容。",
       ordinal: 2,
     },
@@ -74,6 +74,15 @@ test("解析只处理第一个官方文稿区域，没有块时给出稳定错�
     () => parseCleanupDocument("# 标题\n\n## 官方文稿\n\n## 附加说明\n"),
     (error: unknown) => error instanceof Error && /CLEANUP_NO_BLOCKS/.test(error.message) && (error as Error & { code?: string }).code === "CLEANUP_NO_BLOCKS",
   );
+});
+
+test("识别说话人标题后的无时间戳多行正文，并在下一元数据处结束", () => {
+  const markdown = `## 官方文稿\n\n### 旁白\n\n这是没有时间戳的正文。\n这是第二行。\n\n### 主播\n\n[00:00:01] 有时间戳的正文。\n\n## 附加说明\n`;
+  const document = parseCleanupDocument(markdown);
+  assert.deepEqual(document.blocks.map(({ id, speakerLabel, timestampText, text, ordinal }) => ({ id, speakerLabel, timestampText, text, ordinal })), [
+    { id: "seg-000001", speakerLabel: "旁白", timestampText: null, text: "这是没有时间戳的正文。\n这是第二行。", ordinal: 0 },
+    { id: "seg-000002", speakerLabel: "主播", timestampText: "[00:00:01]", text: "有时间戳的正文。", ordinal: 1 },
+  ]);
 });
 
 test("assembler 只替换正文并逐字节保留元数据、空行和其它区域", () => {
@@ -103,6 +112,9 @@ test("按块边界分块，超大块独占且不复制或丢失", () => {
   assert.ok(chunks.every((chunk) => chunk.length === 1 || chunk.reduce((total, block) => total + block.text.length, 0) <= 55));
   assert.equal(splitCleanupBlocks(blocks, 1000).length, 1);
   assert.throws(() => splitCleanupBlocks(blocks, 0), /maxChars|positive/i);
+  const unicodeBlocks = [{ ...blocks[0], text: "😀😀a" }, { ...blocks[1], text: "xy" }];
+  assert.deepEqual(splitCleanupBlocks(unicodeBlocks, 4).map((chunk) => chunk.map((block) => block.id)), [["seg-000001"], ["seg-000002"]]);
+  assert.deepEqual(splitCleanupBlocks(unicodeBlocks, 5).map((chunk) => chunk.map((block) => block.id)), [["seg-000001", "seg-000002"]]);
 });
 
 test("解析纯 JSON 和可选 json 代码围栏，拒绝解释文字与不合法结构", () => {
@@ -143,6 +155,8 @@ test("validate 只接受高置信 typo，拒绝低置信、危险、异常长度
   assert.ok(long.rejectedIds.includes("seg-000001"));
   const fakeRemoval = validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "x", changes: [{ type: "filler", from: "a", to: "x", confidence: 1 }] }] })), oneId);
   assert.ok(fakeRemoval.rejectedIds.includes("seg-000001"));
+  const undeclaredRewrite = validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "同长度但未声明", changes: [] }] })), oneId);
+  assert.ok(undeclaredRewrite.rejectedIds.includes("seg-000001"));
   const fenced = validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "###", changes: [] }] })), oneId);
   assert.ok(fenced.rejectedIds.includes("seg-000001"));
   assert.throws(() => validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "x", changes: [] }] })), new Set(["seg-000001", "extra"])), /missing|extra|ID/i);
