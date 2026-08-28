@@ -90,6 +90,10 @@ test("assembler 只替换正文并逐字节保留元数据、空行和其它区�
   assert.throws(() => assembleCleanupDocument(document, new Map([["unknown", "x"]])), /unknown|CLEANUP_UNKNOWN_ID/);
   assert.throws(() => assembleCleanupDocument(document, new Map([["seg-000001", "[00:00:22] unsafe"]])), /unsafe|CLEANUP_UNSAFE_REPLACEMENT/);
   assert.throws(() => assembleCleanupDocument(document, new Map([["seg-000001", "### heading"]])), /unsafe|CLEANUP_UNSAFE_REPLACEMENT/);
+  assert.throws(() => assembleCleanupDocument(document, new Map([["seg-000001", "###"]])), /unsafe|CLEANUP_UNSAFE_REPLACEMENT/);
+  assert.throws(() => assembleCleanupDocument(document, new Map([["seg-000001", "~~~json\n{}\n~~~"]])), /unsafe|CLEANUP_UNSAFE_REPLACEMENT/);
+  const ordinary = assembleCleanupDocument(document, new Map([["seg-000001", "普通文本 ### 内联"]])).includes("普通文本 ### 内联");
+  assert.equal(ordinary, true);
 });
 
 test("按块边界分块，超大块独占且不复制或丢失", () => {
@@ -113,6 +117,7 @@ test("解析纯 JSON 和可选 json 代码围栏，拒绝解释文字与不合�
   assert.throws(() => parseCleanupModelResult(JSON.stringify({ schemaVersion: 2, segments: [] })), /schemaVersion/i);
   assert.throws(() => parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "x", text: "x", changes: [{ type: "typo", from: "x", to: "y", confidence: 1.2 }] }] })), /confidence/i);
   assert.throws(() => parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "x", text: "x", changes: [{ type: "other", from: "x", to: "y", confidence: 1 }] }] })), /type/i);
+  assert.throws(() => parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "x", text: "x", changes: [{ type: ["typo"], from: "x", to: "y", confidence: 0.5 }] }] })), /type/i);
 });
 
 test("validate 只接受高置信 typo，拒绝低置信、危险、异常长度和空输出", () => {
@@ -136,5 +141,9 @@ test("validate 只接受高置信 typo，拒绝低置信、危险、异常长度
   assert.equal(empty.replacements.has("seg-000001"), false);
   const long = validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "x".repeat(300), changes: [] }] })), oneId);
   assert.ok(long.rejectedIds.includes("seg-000001"));
+  const fakeRemoval = validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "x", changes: [{ type: "filler", from: "a", to: "x", confidence: 1 }] }] })), oneId);
+  assert.ok(fakeRemoval.rejectedIds.includes("seg-000001"));
+  const fenced = validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "###", changes: [] }] })), oneId);
+  assert.ok(fenced.rejectedIds.includes("seg-000001"));
   assert.throws(() => validateCleanupModelResult(document, parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "seg-000001", text: "x", changes: [] }] })), new Set(["seg-000001", "extra"])), /missing|extra|ID/i);
 });

@@ -139,9 +139,9 @@ export function parseCleanupDocument(markdown: string): CleanupDocument {
 
 function hasUnsafeMarker(value: string): boolean {
   return /\[\d{2}:\d{2}:\d{2}(?:\.\d+)?\]/.test(value)
-    || /^\s*#{1,6}\s+/m.test(value)
+    || /^\s*#{1,6}(?:[ \t]+.*)?[ \t]*$/m.test(value)
     || /^\s*---\s*$/m.test(value)
-    || /^\s*```/m.test(value);
+    || /^\s*(?:`{3,}|~{3,})/m.test(value);
 }
 
 export function assembleCleanupDocument(document: CleanupDocument, replacements: ReadonlyMap<string, string>): string {
@@ -213,7 +213,7 @@ export function parseCleanupModelResult(value: string): CleanupModelResult {
       if (!rawChange || typeof rawChange !== "object" || Array.isArray(rawChange)) throw new TypeError(`change ${index}.${changeIndex} must be an object`);
       const change = rawChange as Record<string, unknown>;
       exactKeys(change, ["type", "from", "to", "confidence"], `change ${index}.${changeIndex}`);
-      if (!["filler", "repetition", "typo", "punctuation"].includes(String(change.type))) throw new TypeError(`change ${index}.${changeIndex}.type is invalid`);
+      if (typeof change.type !== "string" || !["filler", "repetition", "typo", "punctuation"].includes(change.type)) throw new TypeError(`change ${index}.${changeIndex}.type is invalid`);
       if (typeof change.from !== "string" || typeof change.to !== "string") throw new TypeError(`change ${index}.${changeIndex} text fields are invalid`);
       if (typeof change.confidence !== "number" || !Number.isFinite(change.confidence) || change.confidence < 0 || change.confidence > 1) throw new RangeError(`change ${index}.${changeIndex}.confidence is invalid`);
       return { type: change.type as CleanupChange["type"], from: change.from, to: change.to, confidence: change.confidence };
@@ -245,7 +245,9 @@ export function validateCleanupModelResult(document: CleanupDocument, result: Cl
     if (!segment.text.trim()) { rejectedIds.push(segment.id); continue; }
     const unsafe = hasUnsafeMarker(segment.text) || segment.changes.some((change) => hasUnsafeMarker(change.from) || hasUnsafeMarker(change.to));
     const lowTypo = segment.changes.some((change) => change.type === "typo" && change.confidence < 0.9);
-    const removalOnly = segment.changes.length > 0 && segment.changes.every((change) => change.type === "filler" || change.type === "repetition");
+    const removalOnly = segment.changes.length > 0 && segment.changes.every((change) =>
+      (change.type === "filler" || change.type === "repetition") && change.from.trim().length > 0 && change.to.trim().length === 0,
+    );
     const originalLength = nonWhitespaceLength(block.text);
     const outputLength = nonWhitespaceLength(segment.text);
     const tooLong = originalLength > 0 && outputLength > originalLength * 1.5;
