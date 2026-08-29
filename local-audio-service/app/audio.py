@@ -17,6 +17,7 @@ SUPPORTED_SUFFIXES = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".mp4", ".webm"}
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_REDIRECTS = 3
 OFFICIAL_AUDIO_HOST_SUFFIXES = ("xyzcdn.net", "xiaoyuzhoufm.com")
+PROXY_DNS_BENCHMARK_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 DEFAULT_ALLOWED_ORIGINS = frozenset({"http://localhost:3000", "http://127.0.0.1:3000"})
 
 
@@ -112,6 +113,17 @@ def validate_remote_audio_url(value: str, allowed_origins=frozenset()) -> str:
 
 
 def _validate_public_dns(hostname: str) -> None:
+    # When urllib is configured with an HTTPS proxy, the proxy resolves the
+    # remote hostname. Some local proxy clients intentionally map public
+    # domains to RFC 2544 benchmark addresses (for example 198.18.0.0/15),
+    # which must not be mistaken for a direct private-network target here.
+    # The URL host/redirect allowlist is still enforced before this function.
+    proxies = urllib.request.getproxies()
+    try:
+        proxy_bypasses_host = urllib.request.proxy_bypass(hostname)
+    except OSError:
+        proxy_bypasses_host = True
+    proxy_resolves_host = bool((proxies.get("https") or proxies.get("all")) and not proxy_bypasses_host)
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError:
@@ -133,6 +145,8 @@ def _validate_public_dns(hostname: str) -> None:
         except ValueError as error:
             raise AudioValidationError("AUDIO_HOST_NOT_ALLOWED") from error
         if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved or address.is_multicast or address.is_unspecified:
+            if proxy_resolves_host and address in PROXY_DNS_BENCHMARK_NETWORK:
+                continue
             raise AudioValidationError("AUDIO_HOST_NOT_ALLOWED")
 
 

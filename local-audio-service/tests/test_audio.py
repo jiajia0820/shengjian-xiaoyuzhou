@@ -133,6 +133,47 @@ class AudioValidationTests(unittest.TestCase):
                 with self.assertRaisesRegex(AudioValidationError, "AUDIO_TOO_LONG"):
                     download_remote_audio("https://media.xyzcdn.net/audio.m4a", Path(directory), allowed_origins=frozenset())
 
+    def test_remote_download_allows_proxy_resolved_official_cdn(self):
+        response = FakeRemoteResponse([b"audio"])
+        proxy_env = {
+            "HTTP_PROXY": "http://127.0.0.1:7897",
+            "HTTPS_PROXY": "http://127.0.0.1:7897",
+            "http_proxy": "http://127.0.0.1:7897",
+            "https_proxy": "http://127.0.0.1:7897",
+            "NO_PROXY": "",
+            "no_proxy": "",
+        }
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", proxy_env), patch(
+            "app.audio.socket.getaddrinfo",
+            return_value=[(2, 1, 6, "", ("198.18.0.109", 0))],
+        ), patch("app.audio.build_remote_opener") as build_opener:
+            build_opener.return_value.open.return_value = response
+            with patch("app.audio.validate_audio_file", return_value=12_000):
+                path, duration_ms = download_remote_audio(
+                    "https://media.xyzcdn.net/audio.m4a", Path(directory), allowed_origins=frozenset()
+                )
+            self.assertEqual(path.read_bytes(), b"audio")
+            self.assertEqual(duration_ms, 12_000)
+
+    def test_proxy_does_not_allow_other_private_cdn_resolution(self):
+        proxy_env = {
+            "HTTP_PROXY": "http://127.0.0.1:7897",
+            "HTTPS_PROXY": "http://127.0.0.1:7897",
+            "http_proxy": "http://127.0.0.1:7897",
+            "https_proxy": "http://127.0.0.1:7897",
+            "NO_PROXY": "",
+            "no_proxy": "",
+        }
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", proxy_env), patch(
+            "app.audio.socket.getaddrinfo",
+            return_value=[(2, 1, 6, "", ("192.168.1.10", 0))],
+        ), patch("app.audio.build_remote_opener") as build_opener:
+            with self.assertRaisesRegex(AudioValidationError, "AUDIO_HOST_NOT_ALLOWED"):
+                download_remote_audio(
+                    "https://media.xyzcdn.net/audio.m4a", Path(directory), allowed_origins=frozenset()
+                )
+            build_opener.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
