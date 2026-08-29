@@ -7,6 +7,7 @@ import XiaoyuzhouCaptcha, {
   type XiaoyuzhouCaptchaToken,
 } from "@/app/xiaoyuzhou-captcha";
 import { SpeakerDiarizationPanel } from "@/app/speaker-diarization-panel";
+import { stripRedundantAnalysisHeading } from "@/lib/analysis-format";
 import {
   cleanupProgressLabel,
   consumeCleanupResponse,
@@ -69,11 +70,35 @@ function dateLabel(value: string | null): string {
     .format(new Date(value)).replaceAll("/", ".");
 }
 
-function MarkdownPreview({ markdown }: { markdown: string }) {
+function stripEpisodeMetaFromPreview(lines: string[]): string[] {
+  const titleIndex = lines.findIndex((line) => /^#\s+/.test(line));
+  if (titleIndex < 0) return lines;
+  let cursor = titleIndex + 1;
+  while (cursor < lines.length && !lines[cursor].trim()) cursor += 1;
+  if (!/^>\s*节目：/.test(lines[cursor] ?? "")) return lines;
+  cursor += 1;
+  while (cursor < lines.length && !lines[cursor].trim()) cursor += 1;
+  if (!/^>\s*原始单集：/.test(lines[cursor] ?? "")) return lines;
+  cursor += 1;
+  while (cursor < lines.length && !lines[cursor].trim()) cursor += 1;
+  return [...lines.slice(0, titleIndex + 1), "", ...lines.slice(cursor)];
+}
+
+function MarkdownPreview({
+  markdown,
+  hideEpisodeMeta = false,
+  analysisPreview = false,
+}: { markdown: string; hideEpisodeMeta?: boolean; analysisPreview?: boolean }) {
   const body = useMemo(() => markdown.replace(/^---[\s\S]*?---\s*/, ""), [markdown]);
+  const lines = useMemo(() => {
+    let nextLines = body.split(/\r?\n/);
+    if (hideEpisodeMeta) nextLines = stripEpisodeMetaFromPreview(nextLines);
+    if (analysisPreview) nextLines = stripRedundantAnalysisHeading(nextLines);
+    return nextLines;
+  }, [body, hideEpisodeMeta, analysisPreview]);
   return (
-    <div className="markdown-preview">
-      {body.split("\n").map((line, index) => {
+    <div className={analysisPreview ? "markdown-preview analysis-preview" : "markdown-preview"}>
+      {lines.map((line, index) => {
         if (line.startsWith("# ")) return <h1 key={index}>{line.slice(2)}</h1>;
         if (line.startsWith("## ")) return <h2 key={index}>{line.slice(3)}</h2>;
         if (line.startsWith("### ")) return <h3 key={index}>{line.slice(4)}</h3>;
@@ -395,9 +420,9 @@ export default function Workspace({
       setCleanupUndoAvailable(result.undoAvailable !== false);
       setSpeakerLayoutStale(Boolean(result.speakerLayoutStale));
       try { await loadEpisodes(); } catch { /* 尽力刷新列表；不影响已成功的清理结果 */ }
-      setNotice({ kind: "success", text: "AI 清理完成，已保留撤销快照" });
+      setNotice({ kind: "success", text: "AI 整理完成，已保留撤销快照" });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "AI 清理失败，当前文稿未改变";
+      const message = error instanceof Error ? error.message : "AI 整理失败，当前文稿未改变";
       if (message.includes("AI 设置") || message.includes("AI 服务")) {
         setAiModalOpen(true);
         setNotice({ kind: "info", text: message });
@@ -412,7 +437,7 @@ export default function Workspace({
   async function undoCleanup() {
     if (!selected || cleanupProcessing || !cleanupUndoAvailable) return;
     setCleanupProcessing(true);
-    setCleanupProgress("正在撤销 AI 清理…");
+    setCleanupProgress("正在撤销 AI 整理…");
     try {
       const currentHash = await sha256Hex(markdown);
       const response = await apiFetch(`/api/episodes/${selected.eid}/cleanup/undo`, {
@@ -431,31 +456,11 @@ export default function Workspace({
       setCleanupUndoAvailable(false);
       setSpeakerLayoutStale(false);
       try { await loadEpisodes(); } catch { /* 尽力刷新列表；不影响已成功的撤销结果 */ }
-      setNotice({ kind: "success", text: "已撤销 AI 清理，恢复清理前的编辑稿" });
+      setNotice({ kind: "success", text: "已撤销 AI 整理，恢复整理前的编辑稿" });
     } catch (error) {
-      setNotice({ kind: "error", text: error instanceof Error ? error.message : "撤销 AI 清理失败" });
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "撤销 AI 整理失败" });
     } finally {
       setCleanupProcessing(false);
-    }
-  }
-
-  async function restoreOriginal() {
-    if (!selected || cleanupProcessing || !window.confirm("用官方原稿覆盖当前编辑稿？官方原稿本身不会改变。")) return;
-    setSaving(true);
-    try {
-      const data = await responseJson<{ markdown: string }>(await apiFetch(`/api/episodes/${selected.eid}/restore`, { method: "POST" }));
-      setMarkdown(data.markdown);
-      setCleanupStats(null);
-      setCleanupUndoAvailable(false);
-      setSpeakerLayoutStale(false);
-      setAnalysisResults((results) => results.map((result) => result.sourceType === "current" ? { ...result, stale: true } : result));
-      setEditorMode("preview");
-      await loadEpisodes();
-      setNotice({ kind: "success", text: "当前编辑稿已恢复为官方原稿" });
-    } catch (error) {
-      setNotice({ kind: "error", text: error instanceof Error ? error.message : "恢复失败" });
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -1039,23 +1044,29 @@ export default function Workspace({
                 <button className={editorMode === "edit" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => setEditorMode("edit")}>编辑 Markdown</button>
               </div>
               <div className="document-actions">
-                <button type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => void copyText(markdown, "Markdown 已复制")}>复制</button>
-                <button type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => void downloadFile(`/api/episodes/${selected.eid}/download`, `${selected.title}.md`)}>下载 .md</button>
-                <button type="button" disabled={importing || speakerProcessing || cleanupProcessing} onClick={() => void importEpisode(undefined, true)}>重新获取原稿</button>
-                <button type="button" disabled={saving || speakerProcessing || cleanupProcessing} onClick={() => void restoreOriginal()}>恢复原稿</button>
-                <button type="button" disabled={cleanupProcessing || speakerProcessing} onClick={() => void cleanupTranscript()}>AI 清理文稿</button>
-                {cleanupUndoAvailable && <button type="button" disabled={cleanupProcessing || speakerProcessing} onClick={() => void undoCleanup()}>撤销 AI 清理</button>}
-                <SpeakerDiarizationPanel
-                  episode={selected}
-                  onSaved={(nextMarkdown) => { setMarkdown(nextMarkdown); setEditorMode("preview"); void loadEpisodes(); }}
-                  reportNotice={setNotice}
-                  onBusyChange={setSpeakerProcessing}
-                  disabled={cleanupProcessing}
-                />
-                <button className="danger-button" type="button"
-                  disabled={deletingEid === selected.eid || saving || generating || importing || speakerProcessing || cleanupProcessing}
-                  onClick={() => void deleteEpisode()}>{deletingEid === selected.eid ? "删除中…" : "删除文稿"}</button>
-                {editorMode === "edit" && <button className="save-button" type="button" disabled={saving || speakerProcessing || cleanupProcessing} onClick={() => void saveDocument()}>{saving ? "保存中…" : "保存编辑"}</button>}
+                <div className="document-action-scroll">
+                  <button type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => void copyText(markdown, "Markdown 已复制")}>复制</button>
+                  <button type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => void downloadFile(`/api/episodes/${selected.eid}/download`, `${selected.title}.md`)}>下载 .md</button>
+                  <button type="button" disabled={cleanupProcessing || speakerProcessing} onClick={() => void cleanupTranscript()}>AI 整理</button>
+                  {cleanupUndoAvailable && <button type="button" disabled={cleanupProcessing || speakerProcessing} onClick={() => void undoCleanup()}>撤销 AI 整理</button>}
+                  <SpeakerDiarizationPanel
+                    episode={selected}
+                    onSaved={(nextMarkdown) => { setMarkdown(nextMarkdown); setEditorMode("preview"); void loadEpisodes(); }}
+                    reportNotice={setNotice}
+                    onBusyChange={setSpeakerProcessing}
+                    disabled={cleanupProcessing}
+                  />
+                  {editorMode === "edit" && <button className="save-button" type="button" disabled={saving || speakerProcessing || cleanupProcessing} onClick={() => void saveDocument()}>{saving ? "保存中…" : "保存编辑"}</button>}
+                </div>
+                <details className="document-more-actions">
+                  <summary>更多</summary>
+                  <div className="document-more-menu">
+                    <button type="button" disabled={importing || speakerProcessing || cleanupProcessing} onClick={() => void importEpisode(undefined, true)}>重新获取原稿</button>
+                    <button className="danger-button" type="button"
+                      disabled={deletingEid === selected.eid || saving || generating || importing || speakerProcessing || cleanupProcessing}
+                      onClick={() => void deleteEpisode()}>{deletingEid === selected.eid ? "删除中…" : "删除文稿"}</button>
+                  </div>
+                </details>
               </div>
             </div>
           ) : (
@@ -1089,19 +1100,19 @@ export default function Workspace({
                 : editorMode === "edit" ? <textarea aria-label="Markdown 编辑器" disabled={cleanupProcessing} value={markdown} onChange={(event) => setMarkdown(event.target.value)} spellCheck={false} />
                   : <>
                     {cleanupStats && <div className="cleanup-summary" role="status" aria-live="polite">
-                      <strong>AI 清理统计</strong>
+                      <strong>AI 整理统计</strong>
                       <span>处理 {cleanupStats.processedBlocks} 段 · 变更 {cleanupStats.changedBlocks} 段</span>
                       <span>删除语气词 {cleanupStats.fillerRemoved} · 合并重复 {cleanupStats.repetitionsMerged} · 修正错字 {cleanupStats.typosFixed}</span>
                       <span>未处理 {cleanupStats.unprocessedBlocks} 段{speakerLayoutStale ? " · 说话人布局需重新生成" : ""}</span>
                     </div>}
-                    <MarkdownPreview markdown={markdown} />
+                    <MarkdownPreview markdown={markdown} hideEpisodeMeta />
                   </>
             ) : analysisLoading ? (
               <div className="document-loading">正在读取分析结果…</div>
             ) : generating ? (
               <div className="analysis-empty"><span>AI</span><h3>正在覆盖全文并生成 Markdown</h3><p>长文稿会先分段提炼，再统一汇总。请保持页面打开。</p></div>
             ) : analysisMarkdown ? (
-              <MarkdownPreview markdown={analysisMarkdown} />
+              <MarkdownPreview markdown={analysisMarkdown} analysisPreview={documentTab === "summary"} />
             ) : (
               <div className="analysis-empty">
                 <span>{documentTab === "summary" ? "纲" : "问"}</span>

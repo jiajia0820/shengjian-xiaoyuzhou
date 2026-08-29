@@ -69,6 +69,7 @@ test("wires a remote episode-audio speaker review panel into the transcript tool
   assert.match(panel, /validateVoiceprintReferences/);
   assert.match(panel, /mode: "voiceprint"/);
   assert.match(panel, /references/);
+  assert.match(panel, />识别说话人<\/button>/);
   assert.doesNotMatch(panel, /<input[^>]+type="file"/);
   assert.doesNotMatch(panel, /选择本地音频/);
   assert.doesNotMatch(panel, /AUDIO_ACCEPT/);
@@ -80,13 +81,78 @@ test("wires a remote episode-audio speaker review panel into the transcript tool
   assert.doesNotMatch(client, /credentials:\s*["']include["']/);
 });
 
+test("lets the document drawer scroll as one reading surface", async () => {
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const drawer = styles.match(/\.document-drawer\s*\{([^}]*)\}/)?.[1] ?? "";
+  const body = styles.match(/\.document-body\s*\{([^}]*)\}/)?.[1] ?? "";
+
+  assert.match(drawer, /display:\s*flex/);
+  assert.match(drawer, /flex-direction:\s*column/);
+  assert.match(drawer, /overflow-y:\s*auto/);
+  assert.match(drawer, /overflow-x:\s*hidden/);
+  assert.doesNotMatch(drawer, /grid-template-rows/);
+  assert.match(body, /flex:\s*0\s+0\s+auto/);
+  assert.match(body, /overflow:\s*visible/);
+});
+
+test("groups transcript actions and tucks source and destructive actions into more", async () => {
+  const [workspace, styles] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  const toolbarStart = workspace.indexOf('<div className="document-toolbar">');
+  const toolbarEnd = workspace.indexOf('<div className="document-body">', toolbarStart);
+  assert.ok(toolbarStart >= 0 && toolbarEnd > toolbarStart, "transcript toolbar must remain present");
+  const toolbar = workspace.slice(toolbarStart, toolbarEnd);
+  const moreStart = toolbar.indexOf('className="document-more-actions"');
+  assert.ok(moreStart > 0, "secondary actions must have a dedicated more menu");
+  const primary = toolbar.slice(0, moreStart);
+
+  assert.match(primary, /document-action-scroll/);
+  assert.match(primary, />复制<\/button>/);
+  assert.match(primary, />下载 \.md<\/button>/);
+  assert.match(primary, />AI 整理<\/button>/);
+  assert.match(primary, /<SpeakerDiarizationPanel/);
+  assert.doesNotMatch(primary, /重新获取原稿|恢复原稿|删除文稿/);
+  assert.match(toolbar, /<details className="document-more-actions">/);
+  assert.match(toolbar, /<summary>更多<\/summary>/);
+  assert.match(toolbar, /document-more-menu/);
+  assert.match(toolbar, /重新获取原稿/);
+  assert.doesNotMatch(toolbar, /恢复原稿/);
+  assert.match(toolbar, /删除文稿/);
+  assert.match(styles, /\.document-action-scroll\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(styles, /\.document-actions\s*\{[^}]*margin-left:\s*auto/);
+  assert.match(styles, /\.document-action-scroll\s*\{[^}]*justify-content:\s*flex-end/);
+  assert.match(styles, /\.document-more-actions\s*\{[^}]*position:\s*relative/);
+  assert.match(styles, /\.document-more-menu\s*\{[^}]*position:\s*absolute/);
+});
+
+test("hides the episode metadata block only from transcript reading preview", async () => {
+  const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
+  assert.match(workspace, /function stripEpisodeMetaFromPreview/);
+  assert.match(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta \/>/);
+  assert.match(workspace, /<MarkdownPreview markdown=\{analysisMarkdown\} analysisPreview=\{documentTab === "summary"\} \/>/);
+  assert.match(workspace, /节目：/);
+  assert.match(workspace, /原始单集：/);
+});
+
+test("仅为内容梳理预览启用紧凑标题和重复标题过滤", async () => {
+  const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
+  assert.match(workspace, /stripRedundantAnalysisHeading/);
+  assert.match(workspace, /analysisPreview=\{documentTab === "summary"\}/);
+  assert.match(workspace, /className=\{analysisPreview \? "markdown-preview analysis-preview"/);
+  assert.match(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta \/>/);
+});
+
 test("wires AI transcript cleanup controls and hash-protected requests", async () => {
   const [workspace, cleanupRoute] = await Promise.all([
     readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/episodes/[eid]/cleanup/route.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(workspace, /AI 清理文稿/);
-  assert.match(workspace, /撤销 AI 清理/);
+  assert.match(workspace, /AI 整理/);
+  assert.match(workspace, /撤销 AI 整理/);
+  assert.doesNotMatch(workspace, />AI 清理文稿<\/button>/);
+  assert.doesNotMatch(workspace, />撤销 AI 清理<\/button>/);
   assert.match(workspace, /cleanupProcessing/);
   assert.match(workspace, /cleanupProgress/);
   assert.match(workspace, /cleanupStats/);
