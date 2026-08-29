@@ -1027,15 +1027,17 @@ export default function Workspace({
 
       {selected && (
         <div className="document-drawer" role="dialog" aria-modal="true" aria-labelledby="document-title">
-          <div className="drawer-header">
-            <div><span>{selected.podcastTitle}</span><h2 id="document-title">{selected.title}</h2></div>
-            <button className="drawer-close" type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => setSelected(null)} aria-label="关闭文稿">×</button>
+          <div className="document-sticky-header">
+            <div className="drawer-header">
+              <div><span>{selected.podcastTitle}</span><h2 id="document-title">{selected.title}</h2></div>
+              <button className="drawer-close" type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => setSelected(null)} aria-label="关闭文稿">×</button>
+            </div>
+            <nav className="document-tabs" aria-label="文稿内容">
+              <button className={documentTab === "transcript" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("transcript")}>文稿</button>
+              <button className={documentTab === "summary" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("summary")}>内容梳理</button>
+              <button className={documentTab === "learning_prompt" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("learning_prompt")}>学习 Prompt</button>
+            </nav>
           </div>
-          <nav className="document-tabs" aria-label="文稿内容">
-            <button className={documentTab === "transcript" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("transcript")}>文稿</button>
-            <button className={documentTab === "summary" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("summary")}>内容梳理</button>
-            <button className={documentTab === "learning_prompt" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("learning_prompt")}>学习 Prompt</button>
-          </nav>
 
           {documentTab === "transcript" ? (
             <div className="document-toolbar">

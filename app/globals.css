@@ -218,6 +218,7 @@ h2 { margin: 10px 0 0; font-size: clamp(38px, 5vw, 68px); letter-spacing: -.045e
 .framework-modal-meta { display: flex; justify-content: space-between; color: #74766e; font: 10px/1 var(--font-geist-mono); margin-top: 9px; }
 
 .document-drawer { position: fixed; z-index: 75; inset: 0; background: #fffdf7; color: var(--ink); display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.document-sticky-header { position: sticky; top: 0; z-index: 20; flex: 0 0 auto; background: #fffdf7; }
 .drawer-header, .document-tabs, .document-toolbar, .analysis-toolbar { flex: 0 0 auto; }
 .drawer-header { padding: 18px 32px 15px; border-bottom: 1px solid var(--line); display: flex; align-items: start; justify-content: space-between; gap: 20px; }
 .drawer-header span { color: var(--orange); font-size: 12px; }

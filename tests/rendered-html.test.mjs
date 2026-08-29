@@ -95,6 +95,18 @@ test("lets the document drawer scroll as one reading surface", async () => {
   assert.match(body, /overflow:\s*visible/);
 });
 
+test("keeps the drawer title and tabs fixed while its content scrolls", async () => {
+  const [workspace, styles] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /<div className="document-sticky-header">[\s\S]*<div className="drawer-header">[\s\S]*<nav className="document-tabs"/);
+  assert.match(styles, /\.document-sticky-header\s*\{[^}]*position:\s*sticky/);
+  assert.match(styles, /\.document-sticky-header\s*\{[^}]*top:\s*0/);
+  assert.match(styles, /\.document-sticky-header\s*\{[^}]*z-index:\s*\d+/);
+  assert.match(styles, /\.document-sticky-header\s*\{[^}]*background:\s*#fffdf7/);
+});
+
 test("groups transcript actions and tucks source and destructive actions into more", async () => {
   const [workspace, styles] = await Promise.all([
     readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
