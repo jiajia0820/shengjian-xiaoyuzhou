@@ -5,7 +5,12 @@ import { HttpError } from "./user";
 export async function documentKeys(userId: string, eid: string) {
   const owner = (await sha256Hex(userId)).slice(0, 24);
   const base = `users/${owner}/episodes/${eid}`;
-  return { originalKey: `${base}/original.md`, currentKey: `${base}/current.md` };
+  return {
+    originalKey: `${base}/original.md`,
+    currentKey: `${base}/current.md`,
+    transcriptKey: `${base}/transcript.json`,
+    aiCleanupSnapshotKey: `${base}/revisions/ai-cleanup-latest.json`,
+  };
 }
 
 export async function analysisDocumentKey(userId: string, eid: string, slot: string): Promise<string> {
@@ -20,9 +25,35 @@ export async function putMarkdown(key: string, markdown: string): Promise<void> 
   });
 }
 
+export async function putJson(key: string, value: unknown): Promise<void> {
+  await getRuntimeEnv().DOCUMENTS.put(key, JSON.stringify(value), {
+    httpMetadata: { contentType: "application/json; charset=utf-8" },
+  });
+}
+export async function putMarkdownIfEtag(key: string, markdown: string, etag: string): Promise<string | null> {
+  const result = await getRuntimeEnv().DOCUMENTS.put(key, markdown, { onlyIf: { etagMatches: etag }, httpMetadata: { contentType: "text/markdown; charset=utf-8" } });
+  return result ? (result.etag ?? null) : null;
+}
+
+export async function readMarkdownWithEtag(key: string): Promise<{ markdown: string; etag: string | null }> {
+  const object = await getRuntimeEnv().DOCUMENTS.get(key);
+  if (!object) throw new HttpError(404, "DOCUMENT_NOT_FOUND", "文稿文件不存在");
+  return { markdown: await object.text(), etag: object.etag ?? null };
+}
+
+export async function deleteDocument(key: string): Promise<void> {
+  await getRuntimeEnv().DOCUMENTS.delete(key);
+}
+
 export async function readMarkdown(key: string): Promise<string> {
   const object = await getRuntimeEnv().DOCUMENTS.get(key);
   if (!object) throw new HttpError(404, "DOCUMENT_NOT_FOUND", "文稿文件不存在");
+  return object.text();
+}
+
+export async function readJson(key: string): Promise<string> {
+  const object = await getRuntimeEnv().DOCUMENTS.get(key);
+  if (!object) throw new HttpError(404, "DOCUMENT_NOT_FOUND", "文稿结构文件不存在");
   return object.text();
 }
 

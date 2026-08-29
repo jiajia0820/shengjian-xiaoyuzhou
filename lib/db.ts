@@ -469,6 +469,19 @@ export async function touchCurrentDocument(userId: string, eid: string, contentH
   ).bind(contentHash, new Date().toISOString(), userId, eid).run();
 }
 
+export async function touchCurrentDocumentIfHash(
+  userId: string,
+  eid: string,
+  expectedHash: string,
+  nextHash: string,
+): Promise<boolean> {
+  await ensureSchema();
+  const result = await getRuntimeEnv().DB.prepare(
+    "UPDATE episodes SET content_hash = ?, updated_at = ? WHERE user_id = ? AND eid = ? AND content_hash = ?",
+  ).bind(nextHash, new Date().toISOString(), userId, eid, expectedHash).run();
+  return Boolean(result.meta.changes);
+}
+
 export async function setOriginalHash(userId: string, eid: string, hash: string): Promise<void> {
   await ensureSchema();
   await getRuntimeEnv().DB.prepare(

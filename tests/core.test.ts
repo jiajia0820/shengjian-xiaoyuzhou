@@ -9,8 +9,10 @@ import { buildMarkdown, formatTimestamp, shownotesToMarkdown } from "../lib/mark
 import { decryptSecret, encryptSecret, phoneHint, sha256Hex } from "../lib/security.ts";
 import {
   getOfficialEpisode,
+  loginWithSms,
   parseEpisodeUrl,
   sendSmsCode,
+  validateOfficialAudioUrl,
   XiaoyuzhouError,
 } from "../lib/xiaoyuzhou.ts";
 import {
@@ -107,16 +109,19 @@ function routeMockModule(specifier: string): string | undefined {
   const exports: Record<string, string> = {
     "@/lib/analysis": "buildAnalysisMarkdown,generateAnalysisBody",
     "@/lib/ai-settings": "readActiveAiConfiguration",
-    "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,getFramework,publicAnalysis,refundUsage,releaseAnalysisLease,setOriginalHash,upsertAnalysisResult",
-    "@/lib/documents": "analysisDocumentKey,putMarkdown,readMarkdown",
+    "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,getFramework,publicAnalysis,refundUsage,releaseAnalysisLease,setOriginalHash,touchCurrentDocument,upsertAnalysisResult",
+    "@/lib/documents": "analysisDocumentKey,documentKeys,putJson,putMarkdown,readJson,readMarkdown",
     "@/lib/frameworks": "frameworkForAnalysis,SYSTEM_FRAMEWORK_ID",
     "@/lib/security": "sha256Hex",
     "@/lib/user": "apiError,HttpError,requireApiUser",
+    "@/lib/transcript-artifact": "isSpeakerEngine,parseTranscriptArtifact",
+    "@/lib/transcript-speakers": "alignTranscriptSpeakers,applySpeakerOverrides,normalizeDiarizationTurns,normalizeSpeakerLabels,SpeakerInputError",
+    "@/lib/speaker-markdown": "renderSpeakerMarkdown",
   };
   const names = exports[specifier];
   if (!names) return undefined;
   const source = names.split(",").map((name) => (
-    name === "HttpError" || name === "SYSTEM_FRAMEWORK_ID"
+    name === "HttpError" || name === "SYSTEM_FRAMEWORK_ID" || name === "SpeakerInputError"
       ? `export const ${name} = globalThis.__analysisGenerateRouteTestDeps[${JSON.stringify(specifier)}][${JSON.stringify(name)}];`
       : `export const ${name} = (...args) => globalThis.__analysisGenerateRouteTestDeps[${JSON.stringify(specifier)}][${JSON.stringify(name)}](...args);`
   )).join("\n");
@@ -1412,10 +1417,90 @@ test("accepts the current Xiaoyuzhou episode response id field", async () => {
       durationSeconds: 2880,
       publishedAt: "2025-04-14T00:00:00.000Z",
       mediaId: "5fc12a24dee9c1e16dfa4090/li6_sY0Z2KSoJDqzOnBGHUdBIIsW.mp4a",
+      audioUrl: null,
+      audioMimeType: null,
     });
   } finally {
     globalThis.fetch = previousFetch;
   }
+});
+
+const officialAudioTestTokens = {
+  accessToken: "access-token",
+  refreshToken: "refresh-token",
+  deviceId: "device-id",
+};
+
+function officialEpisodeResponse(extra: Record<string, unknown> = {}) {
+  return Response.json({ data: {
+    id: "67fc60374d8edb5eb86d6026",
+    title: "测试单集",
+    podcast: { title: "测试节目" },
+    duration: 120,
+    transcript: { mediaId: "transcript.m4a" },
+    ...extra,
+  } });
+}
+
+test("extracts the official audio source from media source data", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({ data: {
+      id: "67fc60374d8edb5eb86d6026", title: "测试单集",
+      podcast: { title: "测试节目" }, duration: 120,
+      media: { id: "media.m4a", mimeType: "audio/mp4", source: {
+        url: "https://media.xyzcdn.net/test.m4a",
+      } }, transcript: { mediaId: "transcript.m4a" },
+    } });
+    const episode = await getOfficialEpisode("67fc60374d8edb5eb86d6026", officialAudioTestTokens);
+    assert.equal(episode.audioUrl, "https://media.xyzcdn.net/test.m4a");
+    assert.equal(episode.audioMimeType, "audio/mp4");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("falls back through official audio URL fields in a fixed order", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    const responses = [
+      officialEpisodeResponse({
+        media: { url: "https://media.xyzcdn.net/media-url.m4a", source: { url: "" } },
+        enclosure: { url: "https://media.xyzcdn.net/enclosure-url.m4a" },
+      }),
+      officialEpisodeResponse({
+        media: { source: { url: "" } },
+        enclosure: { url: "https://media.xyzcdn.net/enclosure-only.m4a", type: "audio/mp4" },
+      }),
+      officialEpisodeResponse({
+        media: { source: { url: "" } },
+        enclosure: { url: "" },
+        audioUrl: "https://media.xyzcdn.net/audio-field.m4a",
+        audioMimeType: "audio/mp4",
+      }),
+    ];
+    globalThis.fetch = async () => {
+      const response = responses.shift();
+      assert.ok(response, "测试响应数量必须与请求数量一致");
+      return response;
+    };
+    const first = await getOfficialEpisode("67fc60374d8edb5eb86d6026", officialAudioTestTokens);
+    const second = await getOfficialEpisode("67fc60374d8edb5eb86d6026", officialAudioTestTokens);
+    const third = await getOfficialEpisode("67fc60374d8edb5eb86d6026", officialAudioTestTokens);
+    assert.equal(first.audioUrl, "https://media.xyzcdn.net/media-url.m4a");
+    assert.equal(second.audioUrl, "https://media.xyzcdn.net/enclosure-only.m4a");
+    assert.equal(second.audioMimeType, "audio/mp4");
+    assert.equal(third.audioUrl, "https://media.xyzcdn.net/audio-field.m4a");
+    assert.equal(third.audioMimeType, "audio/mp4");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("rejects unsafe official audio URLs", () => {
+  assert.throws(() => validateOfficialAudioUrl("http://127.0.0.1/audio.m4a"), XiaoyuzhouError);
+  assert.throws(() => validateOfficialAudioUrl("https://example.com/audio.m4a"), XiaoyuzhouError);
+  assert.equal(validateOfficialAudioUrl("https://media.xyzcdn.net/audio.m4a"), "https://media.xyzcdn.net/audio.m4a");
 });
 
 test("formats timestamped Markdown without rewriting transcript text", () => {
@@ -1427,6 +1512,8 @@ test("formats timestamped Markdown without rewriting transcript text", () => {
     durationSeconds: 3723,
     publishedAt: "2025-08-28T00:00:00.000Z",
     mediaId: "media.m4a",
+    audioUrl: null,
+    audioMimeType: null,
   }, "https://www.xiaoyuzhoufm.com/episode/6a7e91ff36641f136d8807ab", [
     { startMs: 0, text: "原话一字不改。" },
     { startMs: 3_723_000, text: "第二段原话。" },
@@ -1570,6 +1657,22 @@ test("maps Xiaoyuzhou SMS upstream responses without leaking transport errors", 
   }
 });
 
+test("将小宇宙英文验证码错误转换为可操作的中文提示", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({ message: "wrong sms code" }, { status: 400 });
+    await assert.rejects(
+      loginWithSms("13800138000", "+86", "123456"),
+      (error: unknown) => error instanceof XiaoyuzhouError
+        && error.code === "LOGIN_FAILED"
+        && error.status === 400
+        && error.message === "验证码错误或已过期，请重新发送并输入最新验证码",
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("routes local Xiaoyuzhou requests through the signed host proxy", async () => {
   const previousEnv = globalThis.__aiProviderTestEnv;
   const previousFetch = globalThis.fetch;
@@ -1632,6 +1735,133 @@ test("keeps local Worker development compatible with the configured HTTPS proxy"
   assert.match(upstreamProxy, /content-encoding/);
   assert.match(upstreamProxy, /xyzcdn\.net/);
   assert.match(upstreamProxy, /cloudflare-dns\.com/);
+});
+
+test("保存说话人分段时只使用服务器保存的官方正文", async () => {
+  const [artifactModule, speakersModule, markdownModule] = await Promise.all([
+    import("../lib/transcript-artifact.ts"),
+    import("../lib/transcript-speakers.ts"),
+    import("../lib/speaker-markdown.ts"),
+  ]);
+  const originalMarkdown = `---\nsource: "xiaoyuzhou"\n---\n\n# 标题\n\n## 官方文稿\n\n[00:00:00] 官方原文\n`;
+  const artifact = artifactModule.buildTranscriptArtifact("episode-id", [{ startMs: 0, endMs: 1_000, text: "官方原文" }], "2026-08-24T00:00:00.000Z");
+  let storedMarkdown = "";
+  let storedArtifact = "";
+  let touchedHash = "";
+  globalThis.__analysisGenerateRouteTestDeps = {
+    "@/lib/db": {
+      acquireAnalysisLease: async () => "lease-id",
+      getEpisodeRecord: async () => ({
+        eid: "episode-id", original_key: "original.md", current_key: "current.md",
+        original_hash: "original-hash", duration_seconds: 1,
+      }),
+      releaseAnalysisLease: async () => undefined,
+      touchCurrentDocument: async (_userId: string, _eid: string, hash: string) => { touchedHash = hash; },
+    },
+    "@/lib/documents": {
+      documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json" }),
+      readJson: async () => JSON.stringify(artifact),
+      readMarkdown: async (key: string) => key === "original.md" ? originalMarkdown : originalMarkdown,
+      putJson: async (_key: string, value: unknown) => { storedArtifact = JSON.stringify(value); },
+      putMarkdown: async (_key: string, markdown: string) => { storedMarkdown = markdown; },
+    },
+    "@/lib/security": { sha256Hex: async (value: string) => value === originalMarkdown ? "original-hash" : "rendered-hash" },
+    "@/lib/transcript-artifact": {
+      isSpeakerEngine: artifactModule.isSpeakerEngine,
+      parseTranscriptArtifact: artifactModule.parseTranscriptArtifact,
+    },
+    "@/lib/transcript-speakers": {
+      normalizeDiarizationTurns: speakersModule.normalizeDiarizationTurns,
+      alignTranscriptSpeakers: speakersModule.alignTranscriptSpeakers,
+      normalizeSpeakerLabels: speakersModule.normalizeSpeakerLabels,
+      applySpeakerOverrides: speakersModule.applySpeakerOverrides,
+      SpeakerInputError: speakersModule.SpeakerInputError,
+    },
+    "@/lib/speaker-markdown": { renderSpeakerMarkdown: markdownModule.renderSpeakerMarkdown },
+    "@/lib/user": {
+      apiError: (error: unknown) => { throw error; },
+      HttpError,
+      requireApiUser: async () => ({ userId: "owner" }),
+    },
+  };
+  try {
+    const route = await import(`${new URL("../app/api/episodes/[eid]/speakers/route.ts", import.meta.url).href}?speaker-save=${crypto.randomUUID()}`);
+    const response = await route.PUT(new Request("https://app.example/api/episodes/episode-id/speakers", {
+      method: "PUT",
+      body: JSON.stringify({
+        turns: [{ startMs: 0, endMs: 1_000, speakerId: "speaker_0" }],
+        labels: [{ id: "speaker_0", label: "主持人" }],
+        overrides: [],
+        engine: "pyannote-wespeaker-voiceprint-v1",
+        markdown: "恶意正文",
+      }),
+    }), { params: Promise.resolve({ eid: "episode-id" }) });
+    const payload = await response.json() as { markdown: string };
+
+    assert.equal(response.status, 200);
+    assert.match(payload.markdown, /### 主持人[\s\S]*官方原文/);
+    assert.doesNotMatch(payload.markdown, /恶意正文/);
+    assert.match(payload.markdown, /speaker_source: "pyannote-wespeaker-voiceprint-v1"/);
+    assert.equal(storedMarkdown, payload.markdown);
+    assert.match(storedArtifact, /pyannote-wespeaker-voiceprint-v1/);
+    assert.equal(touchedHash, "rendered-hash");
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+  }
+});
+
+test("说话人预览只计算结果，不写入文稿或旁车文件", async () => {
+  const [artifactModule, speakersModule, markdownModule] = await Promise.all([
+    import("../lib/transcript-artifact.ts"),
+    import("../lib/transcript-speakers.ts"),
+    import("../lib/speaker-markdown.ts"),
+  ]);
+  const originalMarkdown = `---\nsource: "xiaoyuzhou"\n---\n\n# 标题\n\n## 官方文稿\n\n[00:00:00] 官方原文\n`;
+  const artifact = artifactModule.buildTranscriptArtifact("episode-id", [{ startMs: 0, endMs: 1_000, text: "官方原文" }], "2026-08-24T00:00:00.000Z");
+  let writeCount = 0;
+  globalThis.__analysisGenerateRouteTestDeps = {
+    "@/lib/db": { getEpisodeRecord: async () => ({ eid: "episode-id", duration_seconds: 1 }) },
+    "@/lib/documents": {
+      documentKeys: async () => ({ originalKey: "original.md", currentKey: "current.md", transcriptKey: "transcript.json" }),
+      readJson: async () => JSON.stringify(artifact),
+      readMarkdown: async () => originalMarkdown,
+      putJson: async () => { writeCount += 1; },
+      putMarkdown: async () => { writeCount += 1; },
+    },
+    "@/lib/transcript-artifact": {
+      isSpeakerEngine: artifactModule.isSpeakerEngine,
+      parseTranscriptArtifact: artifactModule.parseTranscriptArtifact,
+    },
+    "@/lib/transcript-speakers": {
+      normalizeDiarizationTurns: speakersModule.normalizeDiarizationTurns,
+      alignTranscriptSpeakers: speakersModule.alignTranscriptSpeakers,
+      normalizeSpeakerLabels: speakersModule.normalizeSpeakerLabels,
+      applySpeakerOverrides: speakersModule.applySpeakerOverrides,
+      SpeakerInputError: speakersModule.SpeakerInputError,
+    },
+    "@/lib/speaker-markdown": { renderSpeakerMarkdown: markdownModule.renderSpeakerMarkdown },
+    "@/lib/user": { apiError: (error: unknown) => { throw error; }, HttpError, requireApiUser: async () => ({ userId: "owner" }) },
+  };
+  try {
+    const route = await import(`${new URL("../app/api/episodes/[eid]/speakers/preview/route.ts", import.meta.url).href}?speaker-preview=${crypto.randomUUID()}`);
+    const response = await route.POST(new Request("https://app.example/api/episodes/episode-id/speakers/preview", {
+      method: "POST",
+      body: JSON.stringify({
+        turns: [{ startMs: 0, endMs: 1_000, speakerId: "speaker_0" }],
+        labels: [{ id: "speaker_0", label: "主持人" }],
+        engine: "pyannote-wespeaker-voiceprint-v1",
+      }),
+    }), { params: Promise.resolve({ eid: "episode-id" }) });
+    const payload = await response.json() as { preview: { markdown: string; reviewCount: number } };
+
+    assert.equal(response.status, 200);
+    assert.match(payload.preview.markdown, /### 主持人/);
+    assert.match(payload.preview.markdown, /speaker_source: "pyannote-wespeaker-voiceprint-v1"/);
+    assert.equal(payload.preview.reviewCount, 0);
+    assert.equal(writeCount, 0);
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+  }
 });
 
 test("keeps custom provider credentials out of generated analysis artifacts", async () => {

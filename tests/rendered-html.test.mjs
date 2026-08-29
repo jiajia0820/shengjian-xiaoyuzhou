@@ -38,6 +38,141 @@ test("packages Sites persistence metadata and migration", async () => {
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
 });
 
+test("stores a transcript.json sidecar beside each episode document", async () => {
+  const documents = await readFile(new URL("../lib/documents.ts", import.meta.url), "utf8");
+  assert.match(documents, /transcriptKey: `\$\{base\}\/transcript\.json`/);
+});
+
+test("wires a remote episode-audio speaker review panel into the transcript toolbar", async () => {
+  const [workspace, panel, client, styles] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/speaker-diarization-panel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/local-speaker-client.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /SpeakerDiarizationPanel/);
+  assert.match(panel, /audio-source/);
+  assert.match(panel, /sourceUrl/);
+  assert.match(panel, /fallbackUrl/);
+  assert.match(panel, /正在获取小宇宙官方音频/);
+  assert.match(panel, /\/speakers\/preview/);
+  assert.match(panel, /\/speakers`/);
+  assert.match(panel, /const \[turns, setTurns\] = useState<LocalSpeakerTurn\[\]>\(\[\]\)/);
+  assert.match(panel, /setTurns\(current\.segments\)/);
+  assert.match(panel, /JSON\.stringify\(\{ turns, labels, overrides/);
+  assert.match(panel, /音频不会上传/);
+  assert.match(panel, /取消本地任务/);
+  assert.match(panel, /两人声纹/);
+  assert.match(panel, /主持人参考/);
+  assert.match(panel, /嘉宾参考/);
+  assert.match(panel, /<audio[^>]+controls/);
+  assert.match(panel, /validateVoiceprintReferences/);
+  assert.match(panel, /mode: "voiceprint"/);
+  assert.match(panel, /references/);
+  assert.doesNotMatch(panel, /<input[^>]+type="file"/);
+  assert.doesNotMatch(panel, /选择本地音频/);
+  assert.doesNotMatch(panel, /AUDIO_ACCEPT/);
+  assert.match(styles, /\.speaker-diarization-modal\s*\{[^}]*max-height:/);
+  assert.match(styles, /\.speaker-review-list\s*\{[^}]*overflow-y:\s*auto/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*\.speaker-label-grid/);
+  assert.match(panel, /aria-live="polite"/);
+  assert.doesNotMatch(panel, /apiFetch\(LOCAL_SPEAKER/);
+  assert.doesNotMatch(client, /credentials:\s*["']include["']/);
+});
+
+test("wires AI transcript cleanup controls and hash-protected requests", async () => {
+  const [workspace, cleanupRoute] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/episodes/[eid]/cleanup/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /AI 清理文稿/);
+  assert.match(workspace, /撤销 AI 清理/);
+  assert.match(workspace, /cleanupProcessing/);
+  assert.match(workspace, /cleanupProgress/);
+  assert.match(workspace, /cleanupStats/);
+  assert.match(workspace, /cleanupUndoAvailable/);
+  assert.match(workspace, /\/cleanup`/);
+  assert.match(workspace, /\/cleanup\/undo`/);
+  assert.match(workspace, /currentHash/);
+  assert.match(workspace, /body:\s*JSON\.stringify\(\{ currentHash \}\)/);
+  assert.match(workspace, /setMarkdown\(result\.markdown\)/);
+  assert.match(workspace, /setCleanupStats\(result\.stats\)/);
+  assert.match(workspace, /setCleanupUndoAvailable\(result\.undoAvailable/);
+  const cleanupBody = workspace.match(/async function cleanupTranscript\(\) \{([\s\S]*?)\n\s+\}/)?.[1] ?? "";
+  const undoBody = workspace.match(/async function undoCleanup\(\) \{([\s\S]*?)\n\s+\}/)?.[1] ?? "";
+  assert.doesNotMatch(cleanupBody, /setEditorMode\(\s*"preview"\s*\)/);
+  assert.doesNotMatch(undoBody, /setEditorMode\(\s*"preview"\s*\)/);
+  assert.match(workspace, /cleanupUndoAvailable[\s\S]*cleanup`|cleanup`[\s\S]*cleanupUndoAvailable/);
+  assert.match(cleanupRoute, /export async function GET/);
+  assert.match(cleanupRoute, /undoAvailable/);
+  assert.match(workspace, /if \(!aiSettings\.defaultProvider\)/);
+  assert.match(workspace, /setAiModalOpen\(true\)/);
+  assert.match(workspace, /setCleanupProcessing\(true\);[\s\S]*cleanup\/undo/);
+  assert.match(workspace, /setCleanupProcessing\(false\)/);
+  assert.match(workspace, /cleanup refresh|best-effort|尽力刷新|刷新列表失败/);
+  assert.match(workspace, /Accept["']?\s*:\s*["']text\/event-stream/);
+  assert.match(workspace, /processedBlocks|processed/);
+  assert.match(workspace, /changedBlocks|changed/);
+  assert.match(workspace, /fillerRemoved|filler/);
+  assert.match(workspace, /repetitionsMerged|repetition/);
+  assert.match(workspace, /typosFixed|typo/);
+  assert.match(workspace, /unprocessedBlocks|unprocessed/);
+  assert.match(workspace, /disabled=\{cleanupProcessing/);
+});
+
+test("shows chunk progress for long local speaker jobs", async () => {
+  const panel = await readFile(new URL("../app/speaker-diarization-panel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /第 \$\{chunkIndex\}\/\$\{chunkCount\} 块/);
+});
+
+test("documents the two-speaker voiceprint workflow and fallback", async () => {
+  const [rootReadme, localReadme] = await Promise.all([
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+    readFile(new URL("../local-audio-service/README.md", import.meta.url), "utf8"),
+  ]);
+  for (const content of [rootReadme, localReadme]) {
+    assert.match(content, /已有小宇宙文稿/);
+    assert.match(content, /5[–-]30 秒/);
+    assert.match(content, /低置信度/);
+    assert.match(content, /Hugging Face/);
+    assert.match(content, /本机处理/);
+    assert.match(content, /全自动/);
+  }
+});
+
+test("documents the remote official episode-audio workflow", async () => {
+  const [rootReadme, localReadme, spec] = await Promise.all([
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+    readFile(new URL("../local-audio-service/README.md", import.meta.url), "utf8"),
+    readFile(new URL("../docs/superpowers/specs/2026-08-28-remote-episode-audio-design.md", import.meta.url), "utf8"),
+  ]);
+  for (const content of [rootReadme, localReadme]) {
+    assert.match(content, /打开已有小宇宙单集[\s\S]*官方音频/);
+    assert.match(content, /本机流式下载/);
+    assert.match(content, /默认直连[\s\S]*短时 relay/);
+    assert.match(content, /不保存永久音频/);
+    assert.match(content, /2 小时[\s\S]*1GB/);
+    assert.match(content, /5[–-]30 秒/);
+    assert.match(content, /有权处理该音频/);
+    assert.doesNotMatch(content, /必须选择本地音频/);
+  }
+  assert.match(spec, /官方媒体流式转发/);
+  assert.match(spec, /不能使用 32MB JSON 缓冲/);
+});
+
+test("selects CUDA packages when an NVIDIA GPU is available", async () => {
+  const [setup, start] = await Promise.all([
+    readFile(new URL("../scripts/setup-local-speaker-service.ps1", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/start-local-speaker-service.ps1", import.meta.url), "utf8"),
+  ]);
+  assert.match(setup, /nvidia-smi/);
+  assert.match(setup, /SPEAKER_TORCH_INDEX_URL/);
+  assert.match(setup, /cu128/);
+  assert.match(setup, /download\.pytorch\.org\/whl\/cpu/);
+  assert.match(start, /SPEAKER_DEVICE/);
+  assert.match(start, /auto/);
+});
+
 test("keeps browser auth same-origin and packages the Hong Kong gateway", async () => {
   const authShell = await readFile(new URL("../app/auth-shell.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(authShell, /supabase\.co|challenges\.cloudflare\.com|turnstile/i);

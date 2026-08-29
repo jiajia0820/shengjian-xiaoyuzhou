@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { startXiaoyuzhouDevProxy } from "./dev-upstream-proxy.mjs";
+import { ensureLocalDevEncryptionKey } from "./local-dev-env.mjs";
 
 const vinextCli = fileURLToPath(new URL("../node_modules/vinext/dist/cli.js", import.meta.url));
 
+await ensureLocalDevEncryptionKey();
 const proxy = await startXiaoyuzhouDevProxy();
 const child = spawn(process.execPath, [vinextCli, "dev", ...process.argv.slice(2)], {
   env: {

@@ -21,9 +21,18 @@ export type OfficialEpisode = {
   durationSeconds: number | null;
   publishedAt: string | null;
   mediaId: string | null;
+  audioUrl: string | null;
+  audioMimeType: string | null;
 };
 
-export type TranscriptSegment = { startMs: number; text: string };
+export type TranscriptSegment = {
+  startMs: number;
+  endMs?: number | null;
+  text: string;
+  speakerId?: string | null;
+  speakerConfidence?: number | null;
+  speakerNeedsReview?: boolean;
+};
 
 export class XiaoyuzhouError extends Error {
   code: string;
@@ -90,7 +99,14 @@ async function safeJson(response: Response): Promise<Record<string, unknown>> {
 function responseMessage(body: Record<string, unknown>, fallback: string): string {
   for (const key of ["message", "toast", "error"]) {
     const value = body[key];
-    if (typeof value === "string" && value.trim()) return value.trim().slice(0, 240);
+    if (typeof value === "string" && value.trim()) {
+      const message = value.trim();
+      if (/^(?:wrong|invalid|incorrect)\s+(?:sms|verification)\s+code$/i.test(message)
+        || /^(?:sms|verification)\s+code\s+(?:is\s+)?(?:wrong|invalid|incorrect|expired)$/i.test(message)) {
+        return "验证码错误或已过期，请重新发送并输入最新验证码";
+      }
+      return message.slice(0, 240);
+    }
   }
   return fallback;
 }
@@ -200,8 +216,55 @@ async function authenticatedRequest(path: string, tokens: XiaoyuzhouTokens, init
   return safeJson(response);
 }
 
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+export async function fetchOfficialAudio(input: string | URL, init: RequestInit = {}): Promise<Response> {
+  let current = validateOfficialAudioUrl(String(input));
+  const requestInit: RequestInit = { ...init, redirect: "manual" };
+  for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+    const response = await fetchUpstream(
+      current,
+      requestInit,
+      "AUDIO_DOWNLOAD_FAILED",
+      "官方音频下载服务暂时无法连接，请稍后重试",
+    );
+    if (!isRedirectStatus(response.status)) return response;
+    const location = response.headers.get("location");
+    if (response.body) await response.body.cancel();
+    if (!location || redirectCount === 3) {
+      throw new XiaoyuzhouError("AUDIO_REDIRECT_NOT_ALLOWED", "官方音频地址跳转次数过多，请重新获取音频");
+    }
+    try {
+      current = validateOfficialAudioUrl(new URL(location, current).toString());
+    } catch {
+      throw new XiaoyuzhouError("AUDIO_REDIRECT_NOT_ALLOWED", "官方音频地址跳转到不安全的主机");
+    }
+  }
+  throw new XiaoyuzhouError("AUDIO_REDIRECT_NOT_ALLOWED", "官方音频地址跳转次数过多，请重新获取音频");
+}
+
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function isOfficialAudioHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return ["xyzcdn.net", "xiaoyuzhoufm.com"].some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+}
+
+export function validateOfficialAudioUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new XiaoyuzhouError("AUDIO_URL_INVALID", "小宇宙返回了不安全的官方音频地址");
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port || !url.hostname || !isOfficialAudioHost(url.hostname)) {
+    throw new XiaoyuzhouError("AUDIO_URL_INVALID", "小宇宙返回了不安全的官方音频地址");
+  }
+  return url.toString();
 }
 
 export async function getOfficialEpisode(eid: string, tokens: XiaoyuzhouTokens): Promise<OfficialEpisode> {
@@ -210,8 +273,14 @@ export async function getOfficialEpisode(eid: string, tokens: XiaoyuzhouTokens):
   const episodeId = episode.eid || episode.id;
   const podcast = objectValue(episode.podcast);
   const media = objectValue(episode.media);
+  const mediaSource = objectValue(media.source);
+  const enclosure = objectValue(episode.enclosure);
   const transcript = objectValue(episode.transcript);
   const mediaId = episode.transcriptMediaId || transcript.mediaId || media.id;
+  const audioUrlCandidates = [mediaSource.url, media.url, enclosure.url, episode.audioUrl];
+  const audioUrl = audioUrlCandidates.find((value) => typeof value === "string" && value.trim()) as string | undefined;
+  const audioMimeCandidates = [media.mimeType, enclosure.type, episode.audioMimeType];
+  const audioMimeType = audioMimeCandidates.find((value) => typeof value === "string" && value.trim()) as string | undefined;
   if (!episodeId || !episode.title) throw new XiaoyuzhouError("EPISODE_NOT_FOUND", "没有找到这个小宇宙单集", 404);
   return {
     eid: String(episodeId),
@@ -221,6 +290,8 @@ export async function getOfficialEpisode(eid: string, tokens: XiaoyuzhouTokens):
     durationSeconds: Number.isFinite(Number(episode.duration)) ? Number(episode.duration) : null,
     publishedAt: typeof episode.pubDate === "string" ? episode.pubDate : null,
     mediaId: typeof mediaId === "string" && mediaId ? mediaId : null,
+    audioUrl: audioUrl?.trim() || null,
+    audioMimeType: audioMimeType?.trim() || null,
   };
 }
 
@@ -257,7 +328,10 @@ export async function getTranscriptSegments(eid: string, mediaId: string, tokens
     const text = typeof segment.text === "string" ? segment.text.trim() : "";
     if (!text) return [];
     const startMs = Number(segment.startMs);
-    return [{ startMs: Number.isFinite(startMs) && startMs >= 0 ? Math.floor(startMs) : 0, text }];
+    const normalizedStartMs = Number.isFinite(startMs) && startMs >= 0 ? Math.floor(startMs) : 0;
+    const rawEndMs = Number(segment.endMs);
+    const endMs = Number.isFinite(rawEndMs) && rawEndMs >= normalizedStartMs ? Math.floor(rawEndMs) : null;
+    return [{ startMs: normalizedStartMs, endMs, text }];
   });
 }
 

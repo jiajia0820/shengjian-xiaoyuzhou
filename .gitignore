@@ -49,3 +49,10 @@ yarn-error.log*
 
 # local implementation worktrees
 /.worktrees/
+
+# local speaker diarization service
+/local-audio-service/.venv/
+/local-audio-service/.speaker-jobs/
+/local-audio-service/.matplotlib/
+/local-audio-service/test-fixtures/
+__pycache__/

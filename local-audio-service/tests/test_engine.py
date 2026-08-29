@@ -1,0 +1,253 @@
+from __future__ import annotations
+
+import struct
+import sys
+import tempfile
+import unittest
+from types import SimpleNamespace
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.engine import ModelSetupError, PyannoteCommunityEngine, VoiceprintEngine, _decode_audio_range
+from app.models import VoiceprintReference
+
+
+class FakeSegment:
+    def __init__(self, start: float, end: float):
+        self.start = start
+        self.end = end
+
+
+class FakeAnnotation:
+    def itertracks(self, yield_label: bool = False):
+        self.assert_yield_label = yield_label
+        yield FakeSegment(4.0, 6.0), None, "SPEAKER_01"
+        yield FakeSegment(1.25, 3.5), None, "SPEAKER_07"
+
+
+class FakeOutput:
+    def __init__(self, annotation):
+        self.exclusive_speaker_diarization = annotation
+
+
+class FakePipeline:
+    def __init__(self):
+        self.kwargs = None
+
+    def __call__(self, path, **kwargs):
+        self.kwargs = kwargs
+        return FakeOutput(FakeAnnotation())
+
+    def to(self, device):
+        self.device = device
+        return self
+
+
+class RangeSamples:
+    data = "waveform"
+    sample_rate = 16_000
+
+
+class ChunkAnnotation:
+    def __init__(self, turns):
+        self.turns = turns
+
+    def itertracks(self, yield_label: bool = False):
+        for start, end, label in self.turns:
+            yield FakeSegment(start, end), None, label
+
+
+class ChunkPipeline:
+    def __init__(self):
+        self.calls = []
+        self._outputs = [
+            [(0, 600, "local_a")],
+            [(0, 15, "local_a"), (15, 30, "local_a"), (30, 615, "local_b")],
+            [(0, 30, "local_b"), (30, 315, "local_c")],
+        ]
+
+    def __call__(self, file, **kwargs):
+        self.calls.append((file, kwargs))
+        return FakeOutput(ChunkAnnotation(self._outputs[len(self.calls) - 1]))
+
+
+class FakeVoiceprintVAD:
+    def __init__(self):
+        self.calls = 0
+
+    def detect(self, waveform, sample_rate):
+        self.calls += 1
+        return [(1_000, 9_000)] if self.calls <= 2 else [(20_000, 28_000)]
+
+
+class FakeVoiceprintEncoder:
+    def __init__(self):
+        self.calls = 0
+
+    def embed(self, waveforms, sample_rate):
+        self.calls += 1
+        vector = [1.0, 0.0] if self.calls % 2 else [0.0, 1.0]
+        return [vector for _ in waveforms]
+
+
+class FlatVoiceprintEncoder:
+    def embed(self, waveforms, sample_rate):
+        return [[1.0, 1.0] for _ in waveforms]
+
+
+class PyannoteCommunityEngineTests(unittest.TestCase):
+    def test_registers_shared_ffmpeg_directory_for_torchcodec(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict("os.environ", {"FFMPEG_SHARED_BIN": directory}, clear=False), \
+             patch("app.engine.os.add_dll_directory", return_value=object(), create=True) as add_dll_directory:
+            from app.engine import _configure_ffmpeg_shared_bin
+
+            _configure_ffmpeg_shared_bin()
+            add_dll_directory.assert_called_once_with(directory)
+            self.assertTrue(os.environ.get("PATH", "").startswith(directory + os.pathsep))
+
+    def test_decode_audio_range_falls_back_to_ffmpeg_when_torchcodec_cannot_load(self):
+        import types
+        # PyTorch's Windows loader calls subprocess while importing; load it
+        # before replacing subprocess.run with the FFmpeg stub below.
+        import torch
+
+        torchcodec = types.ModuleType("torchcodec")
+        decoders = types.ModuleType("torchcodec.decoders")
+
+        class BrokenAudioDecoder:
+            def __init__(self, *args, **kwargs):
+                raise RuntimeError("Could not load libtorchcodec")
+
+        decoders.AudioDecoder = BrokenAudioDecoder
+        torchcodec.decoders = decoders
+        pcm = b"".join(struct.pack("<f", value) for value in (0.25, -0.5, 0.75))
+        completed = SimpleNamespace(returncode=0, stdout=pcm, stderr=b"")
+
+        with patch.dict(sys.modules, {"torchcodec": torchcodec, "torchcodec.decoders": decoders}), \
+             patch("subprocess.run", return_value=completed) as run:
+            samples = _decode_audio_range(Path("sample.wav"), 1_000, 2_500)
+
+        self.assertEqual(samples.sample_rate, 16_000)
+        self.assertEqual(tuple(samples.data.shape), (1, 3))
+        self.assertEqual(samples.data.tolist(), [[0.25, -0.5, 0.75]])
+        command = run.call_args.args[0]
+        self.assertEqual(Path(command[0]).stem.lower(), "ffmpeg")
+        self.assertIn("-f", command)
+        self.assertIn("f32le", command)
+
+    def test_auto_device_uses_cuda_when_available(self):
+        engine = PyannoteCommunityEngine()
+        pipeline = FakePipeline()
+        engine._pipeline = pipeline
+        fake_torch = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: True),
+            device=lambda name: name,
+        )
+        with patch.dict(sys.modules, {"torch": fake_torch}), patch.dict("os.environ", {"SPEAKER_DEVICE": "auto"}):
+            engine._move_to_requested_device()
+
+        self.assertEqual(pipeline.device, "cuda")
+        self.assertEqual(engine.device_status(), "cuda")
+
+    def test_auto_device_falls_back_to_cpu_when_cuda_is_unavailable(self):
+        engine = PyannoteCommunityEngine()
+        pipeline = FakePipeline()
+        engine._pipeline = pipeline
+        fake_torch = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False),
+            device=lambda name: name,
+        )
+        with patch.dict(sys.modules, {"torch": fake_torch}), patch.dict("os.environ", {"SPEAKER_DEVICE": "auto"}):
+            engine._move_to_requested_device()
+
+        self.assertFalse(hasattr(pipeline, "device"))
+        self.assertEqual(engine.device_status(), "cpu")
+
+    def test_requires_a_hugging_face_token_without_loading_a_model(self):
+        engine = PyannoteCommunityEngine()
+        with patch("app.engine._get_huggingface_token", return_value=None), patch("app.engine._load_pipeline") as load_pipeline:
+            with self.assertRaisesRegex(ModelSetupError, "HF_TOKEN_MISSING"):
+                engine.diarize(Path("sample.wav"), None, lambda progress: None)
+        load_pipeline.assert_not_called()
+
+    def test_normalizes_exclusive_turns_by_first_seen_speaker(self):
+        pipeline = FakePipeline()
+        engine = PyannoteCommunityEngine()
+        progress = []
+        with patch("app.engine._get_huggingface_token", return_value="test-token"), patch("app.engine._load_pipeline", return_value=pipeline), patch("app.engine.probe_duration_ms", return_value=6_000, create=True), patch("app.engine._decode_audio_range", return_value=RangeSamples(), create=True):
+            turns = engine.diarize(Path("sample.wav"), 2, progress.append)
+
+        self.assertEqual([(turn.start_ms, turn.end_ms, turn.speaker_id) for turn in turns], [
+            (1_250, 3_500, "speaker_0"),
+            (4_000, 6_000, "speaker_1"),
+        ])
+        self.assertEqual(pipeline.kwargs, {"num_speakers": 2})
+        self.assertEqual(progress, [35, 90])
+
+    def test_processes_long_audio_in_overlapped_core_windows_and_maps_speakers(self):
+        pipeline = ChunkPipeline()
+        engine = PyannoteCommunityEngine()
+        progress = []
+        with patch("app.engine._get_huggingface_token", return_value="test-token"), patch("app.engine._load_pipeline", return_value=pipeline), patch("app.engine.probe_duration_ms", return_value=25 * 60 * 1000, create=True), patch("app.engine._decode_audio_range", return_value=RangeSamples(), create=True):
+            turns = engine.diarize(Path("sample.wav"), None, progress.append)
+
+        self.assertEqual([(turn.start_ms, turn.end_ms, turn.speaker_id) for turn in turns], [
+            (0, 600_000, "speaker_0"),
+            (600_000, 615_000, "speaker_0"),
+            (615_000, 1_200_000, "speaker_1"),
+            (1_200_000, 1_215_000, "speaker_1"),
+            (1_215_000, 1_500_000, "speaker_2"),
+        ])
+        self.assertEqual(progress, [35, 53, 71, 90])
+        self.assertEqual([call[0]["uri"] for call in pipeline.calls], [
+            "sample-chunk-0", "sample-chunk-1", "sample-chunk-2",
+        ])
+        self.assertEqual([call[0]["waveform"] for call in pipeline.calls], [
+            "waveform", "waveform", "waveform",
+        ])
+
+    def test_voiceprint_identify_uses_reference_centers_and_absolute_chunk_times(self):
+        encoder = FakeVoiceprintEncoder()
+        engine = VoiceprintEngine(vad=FakeVoiceprintVAD(), encoder=encoder)
+        with patch("app.engine._get_huggingface_token", return_value="test-token"), \
+             patch("app.engine.probe_duration_ms", return_value=25 * 60 * 1000), \
+             patch("app.engine._decode_audio_range", return_value=RangeSamples()):
+            turns = engine.identify(Path("sample.wav"), (
+                VoiceprintReference("speaker_0", 0, 10_000),
+                VoiceprintReference("speaker_1", 20_000, 30_000),
+            ), lambda _: None)
+
+        self.assertTrue(turns)
+        self.assertEqual(turns, sorted(turns, key=lambda turn: turn.start_ms))
+        self.assertTrue(all(turn.end_ms > turn.start_ms for turn in turns))
+        self.assertTrue({turn.speaker_id for turn in turns} <= {"speaker_0", "speaker_1"})
+        self.assertGreaterEqual(max(turn.start_ms for turn in turns), 20 * 60 * 1000)
+
+    def test_voiceprint_identify_requires_token_when_encoder_is_not_injected(self):
+        engine = VoiceprintEngine(vad=FakeVoiceprintVAD())
+        with patch("app.engine._get_huggingface_token", return_value=None):
+            with self.assertRaisesRegex(ModelSetupError, "HF_TOKEN_MISSING"):
+                engine.identify(Path("sample.wav"), (
+                    VoiceprintReference("speaker_0", 0, 10_000),
+                    VoiceprintReference("speaker_1", 20_000, 30_000),
+                ), lambda _: None)
+
+    def test_voiceprint_identify_reports_low_confidence_without_publishing_turns(self):
+        engine = VoiceprintEngine(vad=FakeVoiceprintVAD(), encoder=FlatVoiceprintEncoder())
+        with patch("app.engine._get_huggingface_token", return_value="test-token"), \
+             patch("app.engine.probe_duration_ms", return_value=60_000), \
+             patch("app.engine._decode_audio_range", return_value=RangeSamples()):
+            with self.assertRaisesRegex(ModelSetupError, "VOICEPRINT_LOW_CONFIDENCE"):
+                engine.identify(Path("sample.wav"), (
+                    VoiceprintReference("speaker_0", 0, 10_000),
+                    VoiceprintReference("speaker_1", 20_000, 30_000),
+                ), lambda _: None)
+
+
+if __name__ == "__main__":
+    unittest.main()
