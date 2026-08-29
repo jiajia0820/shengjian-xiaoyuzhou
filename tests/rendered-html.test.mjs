@@ -137,11 +137,15 @@ test("hides the episode metadata block only from transcript reading preview", as
 });
 
 test("仅为内容梳理预览启用紧凑标题和重复标题过滤", async () => {
-  const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
+  const [workspace, styles] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
   assert.match(workspace, /stripRedundantAnalysisHeading/);
   assert.match(workspace, /analysisPreview=\{documentTab === "summary"\}/);
   assert.match(workspace, /className=\{analysisPreview \? "markdown-preview analysis-preview"/);
   assert.match(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta \/>/);
+  assert.match(styles, /\.analysis-preview h1\s*\{[^}]*font-size:\s*clamp\(28px, 3\.6vw, 42px\)/);
 });
 
 test("wires AI transcript cleanup controls and hash-protected requests", async () => {
