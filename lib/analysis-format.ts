@@ -12,6 +12,17 @@ function charLength(value: string): number {
   return Array.from(value).length;
 }
 
+export function stripRedundantAnalysisHeading(lines: string[]): string[] {
+  const titleIndex = lines.findIndex((line) => /^#\s+/.test(line));
+  if (titleIndex < 0) return lines;
+  let cursor = titleIndex + 1;
+  while (cursor < lines.length && !lines[cursor].trim()) cursor += 1;
+  if (lines[cursor]?.trim() !== "# 内容梳理") return lines;
+  cursor += 1;
+  while (cursor < lines.length && !lines[cursor].trim()) cursor += 1;
+  return [...lines.slice(0, titleIndex + 1), "", ...lines.slice(cursor)];
+}
+
 export function splitForAnalysis(markdown: string): string[] {
   if (charLength(markdown) <= SINGLE_PASS_CHARS) return [markdown];
   const paragraphs = markdown.replace(/\r/g, "").split(/\n{2,}/);

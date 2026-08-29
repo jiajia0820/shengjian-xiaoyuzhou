@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
-import { buildAnalysisMarkdown, splitForAnalysis } from "../lib/analysis-format.ts";
+import { buildAnalysisMarkdown, splitForAnalysis, stripRedundantAnalysisHeading } from "../lib/analysis-format.ts";
 import { SYSTEM_FRAMEWORK, validateFrameworkInput } from "../lib/frameworks.ts";
 import { buildMarkdown, formatTimestamp, shownotesToMarkdown } from "../lib/markdown.ts";
 import { decryptSecret, encryptSecret, phoneHint, sha256Hex } from "../lib/security.ts";
@@ -1519,6 +1519,8 @@ test("formats timestamped Markdown without rewriting transcript text", () => {
     { startMs: 3_723_000, text: "第二段原话。" },
   ], "2026-08-15T00:00:00.000Z");
   assert.match(markdown, /segment_count: 2/);
+  assert.match(markdown, /> 节目：知行小酒馆/);
+  assert.match(markdown, /原始单集：\[在小宇宙查看\]\(https:\/\/www\.xiaoyuzhoufm\.com\/episode\/6a7e91ff36641f136d8807ab\)/);
   assert.match(markdown, /\[00:00:00\] 原话一字不改。/);
   assert.match(markdown, /\[01:02:03\] 第二段原话。/);
   assert.match(markdown, /第一段\n第二行/);
@@ -1556,6 +1558,19 @@ test("splits long transcripts without dropping content", () => {
   assert.ok(chunks.length > 1);
   assert.ok(chunks.every((chunk) => Array.from(chunk).length <= 50_000));
   assert.equal(chunks.join("").replaceAll("\n", ""), source.replaceAll("\n", ""));
+});
+
+test("只移除系统标题后的重复内容梳理一级标题", () => {
+  const source = [
+    "# 单集标题｜内容梳理", "", "# 内容梳理", "", "## 一句话主旨", "结论。",
+  ];
+  assert.deepEqual(stripRedundantAnalysisHeading(source), [
+    "# 单集标题｜内容梳理", "", "## 一句话主旨", "结论。",
+  ]);
+  const nonDuplicate = ["# 单集标题｜内容梳理", "", "## 内容梳理", "正文。"];
+  assert.deepEqual(stripRedundantAnalysisHeading(nonDuplicate), nonDuplicate);
+  const laterHeading = ["# 单集标题｜内容梳理", "", "## 主旨", "正文。", "", "# 内容梳理"];
+  assert.deepEqual(stripRedundantAnalysisHeading(laterHeading), laterHeading);
 });
 
 test("adds server-owned frontmatter to AI Markdown", () => {
