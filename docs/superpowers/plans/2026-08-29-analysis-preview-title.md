@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 让“内容梳理”预览的主标题更紧凑，并隐藏模型正文开头与系统标题重复的“内容梳理”，而不改动已保存的分析 Markdown。
+**Goal:** 让“文稿”“内容梳理”和“学习 Prompt”预览的主标题统一更紧凑，并仅在内容梳理预览中隐藏模型正文开头与系统标题重复的“内容梳理”，而不改动已保存的分析 Markdown。
 
-**Architecture:** 在共享的分析格式模块中加入一个纯函数，只针对系统标题之后紧邻的独立 `# 内容梳理` 做显示层过滤。`MarkdownPreview` 通过分析预览变体调用该函数并挂载专用 CSS 类；文稿和学习 Prompt 仍使用原有渲染路径。
+**Architecture:** 在共享的分析格式模块中加入一个纯函数，只针对系统标题之后紧邻的独立 `# 内容梳理` 做显示层过滤。`MarkdownPreview` 通过内容梳理预览变体调用该函数，所有 Markdown 预览共用紧凑一级标题样式；学习 Prompt 只使用字号调整，不启用过滤。
 
 **Tech Stack:** React 19、TypeScript、CSS、Node.js 内置测试运行器、ESLint、TypeScript 编译器。
 
@@ -82,7 +82,7 @@ git commit -m "feat: filter duplicate analysis heading in preview"
 在 `tests/rendered-html.test.mjs` 增加：
 
 ```js
-test("仅为内容梳理预览启用紧凑标题和重复标题过滤", async () => {
+test("仅为内容梳理预览启用重复标题过滤并统一标题样式", async () => {
   const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
   assert.match(workspace, /stripRedundantAnalysisHeading/);
   assert.match(workspace, /analysisPreview=\{documentTab === "summary"\}/);
@@ -143,10 +143,10 @@ git add app/workspace.tsx tests/rendered-html.test.mjs
 git commit -m "feat: use compact analysis preview variant"
 ```
 
-### Task 3: 添加分析预览专用字号并验证边界
+### Task 3: 统一所有预览字号并验证边界
 
 **Files:**
-- Modify: `app/globals.css:323` 附近（增加 `.analysis-preview h1`）
+- Modify: `app/globals.css:323` 附近（调整 `.markdown-preview h1` 为统一紧凑字号）
 - Modify: `tests/rendered-html.test.mjs`（增加样式断言）
 
 - [ ] **Step 1: 写失败的样式断言**
@@ -155,7 +155,8 @@ git commit -m "feat: use compact analysis preview variant"
 
 ```js
 const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-assert.match(styles, /\.analysis-preview h1\s*\{[^}]*font-size:\s*clamp\(28px, 3\.6vw, 42px\)/);
+assert.match(styles, /\.markdown-preview h1\s*\{[^}]*font-size:\s*clamp\(28px, 3\.6vw, 42px\)/);
+assert.doesNotMatch(styles, /\.analysis-preview h1\s*\{/);
 ```
 
 运行：`node --experimental-strip-types --test tests/rendered-html.test.mjs`
@@ -164,10 +165,10 @@ assert.match(styles, /\.analysis-preview h1\s*\{[^}]*font-size:\s*clamp\(28px, 3
 
 - [ ] **Step 2: 添加紧凑标题样式**
 
-在现有 `.markdown-preview h1` 规则后加入：
+将现有 `.markdown-preview h1` 规则改为：
 
 ```css
-.analysis-preview h1 {
+.markdown-preview h1 {
   font-size: clamp(28px, 3.6vw, 42px);
   line-height: 1.16;
   letter-spacing: -.035em;
@@ -175,7 +176,7 @@ assert.match(styles, /\.analysis-preview h1\s*\{[^}]*font-size:\s*clamp\(28px, 3
 }
 ```
 
-该规则只作用于带有 `analysis-preview` 类的“内容梳理”预览，不改变文稿和学习 Prompt 的标题。
+该规则作用于文稿、内容梳理和学习 Prompt 三种预览；`analysis-preview` 类仍仅用于重复标题过滤，不再承担字号覆盖。
 
 - [ ] **Step 3: 运行样式与行为测试**
 
