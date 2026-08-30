@@ -3,6 +3,7 @@ import {
   executeModelRequest,
   type AiRuntimeConfig,
   type ModelRequest,
+  type ModelResponse,
 } from "./ai-provider";
 import {
   ANALYSIS_MODEL,
@@ -17,12 +18,21 @@ export type { AnalysisKind, AnalysisSource };
 
 const MAX_DOCUMENT_CHARS = 400_000;
 
+type AnalysisModelExecutor = (
+  config: AiRuntimeConfig,
+  request: ModelRequest,
+) => Promise<Pick<ModelResponse, "text">>;
+
 function charLength(value: string): number {
   return Array.from(value).length;
 }
 
-async function runModel(config: AiRuntimeConfig, request: ModelRequest): Promise<string> {
-  const response = await executeModelRequest(config, request);
+async function runModel(
+  config: AiRuntimeConfig,
+  request: ModelRequest,
+  executeModel: AnalysisModelExecutor = executeModelRequest,
+): Promise<string> {
+  const response = await executeModel(config, request);
   return response.text;
 }
 
@@ -40,6 +50,7 @@ async function buildChunkNotes(
   chunks: string[],
   kind: AnalysisKind,
   frameworkInstructions?: string,
+  executeModel: AnalysisModelExecutor,
 ): Promise<string> {
   const notes = new Array<string>(chunks.length);
   let nextIndex = 0;
@@ -68,7 +79,7 @@ ${frameworkInstructions}`
       input: `${focus}\n\n<document-part>\n${chunks[index]}\n</document-part>`,
       // summary maxOutputTokens: 2_000; learning_prompt maxOutputTokens: 1_600
       maxOutputTokens: kind === "summary" ? 2_000 : 1_600,
-    });
+    }, executeModel);
       notes[index] = `## 文稿分段 ${index + 1}\n\n${note}`;
     }
   }
@@ -83,7 +94,9 @@ export async function generateAnalysisBody(args: {
   episode: EpisodeRecord;
   frameworkName?: string;
   frameworkInstructions?: string;
+  executeModel?: AnalysisModelExecutor;
 }): Promise<string> {
+  const executeModel = args.executeModel ?? executeModelRequest;
   const length = charLength(args.markdown);
   if (length > MAX_DOCUMENT_CHARS) {
     throw new HttpError(413, "ANALYSIS_DOCUMENT_TOO_LARGE", "文稿超过 400,000 字，暂时无法进行全文分析");
@@ -91,7 +104,7 @@ export async function generateAnalysisBody(args: {
   const chunks = splitForAnalysis(args.markdown);
   const sourceMaterial = chunks.length === 1
     ? args.markdown
-    : await buildChunkNotes(args.config, chunks, args.kind, args.frameworkInstructions);
+    : await buildChunkNotes(args.config, chunks, args.kind, args.frameworkInstructions, executeModel);
   const materialLabel = chunks.length === 1 ? "完整播客文稿" : "覆盖完整文稿的分段事实笔记";
 
   if (args.kind === "summary") {
@@ -114,7 +127,7 @@ ${args.frameworkInstructions}
 ${sourceMaterial}
 </document>`,
       maxOutputTokens: 4_000,
-    });
+    }, executeModel);
   }
 
   return runModel(args.config, {
@@ -176,5 +189,5 @@ Prompt 必须明确：接收方 AI 并未持有原始播客文稿；它只能使
 ${sourceMaterial}
 </document>`,
     maxOutputTokens: 5_200,
-  });
+  }, executeModel);
 }
