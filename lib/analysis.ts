@@ -49,8 +49,8 @@ async function buildChunkNotes(
   config: AiRuntimeConfig,
   chunks: string[],
   kind: AnalysisKind,
-  frameworkInstructions?: string,
   executeModel: AnalysisModelExecutor,
+  frameworkInstructions?: string,
 ): Promise<string> {
   const notes = new Array<string>(chunks.length);
   let nextIndex = 0;
@@ -104,7 +104,7 @@ export async function generateAnalysisBody(args: {
   const chunks = splitForAnalysis(args.markdown);
   const sourceMaterial = chunks.length === 1
     ? args.markdown
-    : await buildChunkNotes(args.config, chunks, args.kind, args.frameworkInstructions, executeModel);
+    : await buildChunkNotes(args.config, chunks, args.kind, executeModel, args.frameworkInstructions);
   const materialLabel = chunks.length === 1 ? "完整播客文稿" : "覆盖完整文稿的分段事实笔记";
 
   if (args.kind === "summary") {
