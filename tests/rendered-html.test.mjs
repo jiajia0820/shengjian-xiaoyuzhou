@@ -431,3 +431,18 @@ test("generates staged podcast-host learning prompts", async () => {
   assert.match(analysis, /单集时长/);
   assert.match(analysis, /不得声称自己是真人/);
 });
+
+test("保留内容梳理的原文证据和分段上下文", async () => {
+  const analysis = await readFile(new URL("../lib/analysis.ts", import.meta.url), "utf8");
+
+  assert.match(analysis, /观点提出的上下文/);
+  assert.match(analysis, /论证步骤/);
+  assert.match(analysis, /具体论据\/故事\/案例/);
+  assert.match(analysis, /限定条件和反例/);
+  assert.match(analysis, /短引文或忠实转述/);
+  assert.match(analysis, /原文时间戳/);
+  assert.match(analysis, /不要只摘录结论/);
+  assert.match(analysis, /不要生成最终梳理/);
+  assert.match(analysis, /maxOutputTokens: 2_000/);
+  assert.match(analysis, /maxOutputTokens: 4_000/);
+});

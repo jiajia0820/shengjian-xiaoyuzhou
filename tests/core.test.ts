@@ -1541,6 +1541,12 @@ test("encrypts credentials and produces stable privacy helpers", async () => {
 test("validates reusable Markdown analysis frameworks", () => {
   assert.match(SYSTEM_FRAMEWORK.instructions, /一句话主旨/);
   assert.match(SYSTEM_FRAMEWORK.instructions, /AI 归纳/);
+  assert.match(SYSTEM_FRAMEWORK.instructions, /原文脉络/);
+  assert.match(SYSTEM_FRAMEWORK.instructions, /论证过程/);
+  assert.match(SYSTEM_FRAMEWORK.instructions, /论据\/案例/);
+  assert.match(SYSTEM_FRAMEWORK.instructions, /时间戳/);
+  assert.match(SYSTEM_FRAMEWORK.instructions, /按信息量自然展开/);
+  assert.match(SYSTEM_FRAMEWORK.instructions, /禁止为了达到长度重复/);
   const valid = validateFrameworkInput({
     name: "  投资研究  ",
     instructions: "# 目标\n\n" + "关注论据、风险和反例。".repeat(12),
