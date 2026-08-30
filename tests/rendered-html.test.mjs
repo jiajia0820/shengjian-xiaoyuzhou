@@ -437,7 +437,7 @@ test("保留内容梳理的原文证据和分段上下文", async () => {
 
   assert.match(analysis, /观点提出的上下文/);
   assert.match(analysis, /论证步骤/);
-  assert.match(analysis, /具体论据\/故事\/案例/);
+  assert.match(analysis, /具体论据、故事、案例/);
   assert.match(analysis, /限定条件和反例/);
   assert.match(analysis, /短引文或忠实转述/);
   assert.match(analysis, /原文时间戳/);
