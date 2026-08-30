@@ -30,6 +30,7 @@ import {
   resolveHostnameViaDoh,
 } from "../lib/ai-provider.ts";
 import type { DeepseekAiRuntimeConfig } from "../lib/ai-provider.ts";
+import type { AiRuntimeConfig, ModelRequest } from "../lib/ai-provider.ts";
 import { HttpError } from "../lib/http-error.ts";
 
 type SqliteRow = Record<string, unknown>;
@@ -1564,6 +1565,152 @@ test("splits long transcripts without dropping content", () => {
   assert.ok(chunks.length > 1);
   assert.ok(chunks.every((chunk) => Array.from(chunk).length <= 50_000));
   assert.equal(chunks.join("").replaceAll("\n", ""), source.replaceAll("\n", ""));
+});
+
+const analysisEpisode = {
+  id: 1, user_id: "owner", eid: "analysis-episode", source_url: "https://example.com/episode/analysis-episode",
+  title: "一场关于证据的对谈", podcast_title: "样本播客", published_at: null, duration_seconds: 3600,
+  segment_count: 4, original_key: "original.md", current_key: "current.md", original_hash: "original",
+  content_hash: "current", created_at: "2026-08-15T00:00:00.000Z", updated_at: "2026-08-15T00:00:00.000Z",
+};
+
+const analysisRuntimeConfig = {
+  provider: "custom", apiKey: "test-key", baseUrl: "http://invalid.test",
+  model: "test-model", apiFormat: "responses", reasoningEffort: null,
+} as unknown as AiRuntimeConfig;
+
+type AnalysisExecutor = (config: AiRuntimeConfig, request: ModelRequest) => Promise<{ text: string }>;
+
+async function runAnalysisWithExecutor(
+  args: {
+    kind: "summary" | "learning_prompt";
+    markdown: string;
+    executeModel: AnalysisExecutor;
+    frameworkName?: string;
+    frameworkInstructions?: string;
+  },
+) {
+  const { generateAnalysisBody } = await import("../lib/analysis.ts");
+  return generateAnalysisBody({
+    config: analysisRuntimeConfig,
+    episode: analysisEpisode,
+    ...args,
+  } as unknown as Parameters<typeof generateAnalysisBody>[0] & { executeModel: AnalysisExecutor });
+}
+
+test("uses the injected executor and summary request budget for short transcripts", async () => {
+  const requests: ModelRequest[] = [];
+  const result = await runAnalysisWithExecutor({
+    kind: "summary",
+    markdown: "[00:00:01] 这是原文中的具体论据。\n\n[00:01:02] 这是后续观点。",
+    frameworkName: "证据梳理",
+    frameworkInstructions: "按主题交代观点和证据。",
+    executeModel: async (_config, request) => {
+      requests.push(request);
+      return { text: "摘要结果" };
+    },
+  });
+
+  assert.equal(result, "摘要结果");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].maxOutputTokens, 4_000);
+  assert.match(requests[0].instructions, /证据梳理/);
+  assert.match(requests[0].instructions, /按主题交代观点和证据/);
+  assert.match(requests[0].instructions, /自然段/);
+  assert.match(requests[0].instructions, /时间戳/);
+  assert.match(requests[0].input, /<document>[\s\S]*这是原文中的具体论据/);
+});
+
+test("uses the dedicated learning prompt budget for short transcripts", async () => {
+  const requests: ModelRequest[] = [];
+  const result = await runAnalysisWithExecutor({
+    kind: "learning_prompt",
+    markdown: "[00:00:01] 这是学习材料。",
+    executeModel: async (_config, request) => {
+      requests.push(request);
+      return { text: "学习结果" };
+    },
+  });
+
+  assert.equal(result, "学习结果");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].maxOutputTokens, 5_200);
+  assert.notEqual(requests[0].maxOutputTokens, 4_000);
+  assert.match(requests[0].instructions, /播客听后深度对谈 Prompt/);
+  assert.doesNotMatch(requests[0].instructions, /不要把每个小点只写成一句结论/);
+  assert.doesNotMatch(requests[0].instructions, /不要为了达到字数重复/);
+  assert.doesNotMatch(requests[0].instructions, /为后续按指定框架生成展开版内容梳理/);
+});
+
+test("creates ordered evidence notes for long summary transcripts before final synthesis", async () => {
+  const paragraphs = Array.from({ length: 4 }, (_, index) =>
+    `[${String(index).padStart(2, "0")}:00:00] ${"内容".repeat(45_000)}`,
+  );
+  const markdown = paragraphs.join("\n\n");
+  const chunks = splitForAnalysis(markdown);
+  assert.ok(markdown.length > 180_000);
+  assert.ok(chunks.length >= 4);
+
+  const requests: ModelRequest[] = [];
+  const completionOrder: number[] = [];
+  const pending = new Map<number, () => void>();
+  let releasedInitial = false;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const result = await runAnalysisWithExecutor({
+    kind: "summary",
+    markdown,
+    executeModel: async (_config, request) => {
+      requests.push(request);
+      const match = request.instructions.match(/第 (\d+)\/(\d+) 部分/);
+      if (match) {
+        const part = Number(match[1]);
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (part <= 3) {
+          await new Promise<void>((resolve) => {
+            pending.set(part, resolve);
+            if (!releasedInitial && pending.size === 3) {
+              releasedInitial = true;
+              void (async () => {
+                for (const pendingPart of [...pending.keys()].sort((a, b) => b - a)) {
+                  pending.get(pendingPart)?.();
+                  await Promise.resolve();
+                }
+              })();
+            }
+          });
+        }
+        inFlight -= 1;
+        completionOrder.push(part);
+      }
+      return { text: match ? `分段-${match[1]}` : "最终结果" };
+    },
+  });
+
+  assert.equal(result, "最终结果");
+  assert.equal(requests.length, chunks.length + 1);
+  const chunkRequests = requests.filter((request) => /第 \d+\/\d+ 部分/.test(request.instructions));
+  assert.equal(chunkRequests.length, chunks.length);
+  assert.equal(maxInFlight, 3);
+  assert.notDeepEqual(completionOrder, Array.from({ length: chunks.length }, (_, index) => index + 1));
+  assert.ok(chunkRequests.every((request) => request.maxOutputTokens === 2_000));
+  for (const phrase of [
+    "不要只摘录结论", "观点提出的上下文", "具体论据、故事、案例", "限定条件和反例",
+    "原文时间戳", "无法从本段确认", "不推断未提供",
+  ]) assert.ok(chunkRequests.every((request) => (request.instructions + request.input).includes(phrase)), phrase);
+
+  const finalRequest = requests.find((request) => !/第 \d+\/\d+ 部分/.test(request.instructions));
+  assert.ok(finalRequest);
+  assert.equal(finalRequest.maxOutputTokens, 4_000);
+  assert.deepEqual(
+    Array.from(finalRequest.input.matchAll(/## 文稿分段 (\d+)/g), (match) => Number(match[1])),
+    Array.from({ length: chunks.length }, (_, index) => index + 1),
+  );
+  assert.deepEqual(
+    Array.from(finalRequest.input.matchAll(/分段-(\d+)(?!\d)/g), (match) => Number(match[1])),
+    Array.from({ length: chunks.length }, (_, index) => index + 1),
+  );
 });
 
 test("只移除系统标题后的重复内容梳理一级标题", () => {
