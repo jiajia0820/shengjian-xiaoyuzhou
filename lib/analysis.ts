@@ -51,13 +51,13 @@ async function buildChunkNotes(
       ? `为后续按指定框架生成展开版内容梳理提取材料。
 不要只摘录结论，不要生成最终梳理。
 请提取证据卡片，记录：
-- 本段主题及其在整期节目中的位置；
+- 根据分段编号和当前可见内容能够确认的段落位置；无法从本段确认整期位置时写“不确定”；
 - 观点提出的上下文、论证步骤、比较和观点变化；
 - 具体论据、故事、案例、数字、对比、限定条件和反例；
 - 可支持判断的短引文或忠实转述；
 - 原文时间戳（原文已有的时间戳）及其对应内容，没有可靠时间戳写“不确定”；
 - 文稿中能可靠识别的说话人及其立场，无法确认标记“不确定”；
-- 与前后段衔接或冲突的线索。
+- 仅记录本段可观察到的衔接线索，不推断未提供的前后段内容，无法确认与前后段关系时写“不确定”。
 框架关注点如下：
 ${frameworkInstructions}`
       : `为后续生成“听众听完本期播客后，与主播进行深度探讨”的学习 Prompt 提取材料。
@@ -66,7 +66,8 @@ ${frameworkInstructions}`
     const note = await runModel(config, {
       instructions: `${SECURITY_INSTRUCTIONS}\n\n你正在处理全文的第 ${index + 1}/${chunks.length} 部分。请生成高密度事实笔记，避免提前写最终成稿。`,
       input: `${focus}\n\n<document-part>\n${chunks[index]}\n</document-part>`,
-      maxOutputTokens: 2_000,
+      // summary maxOutputTokens: 2_000; learning_prompt maxOutputTokens: 1_600
+      maxOutputTokens: kind === "summary" ? 2_000 : 1_600,
     });
       notes[index] = `## 文稿分段 ${index + 1}\n\n${note}`;
     }
