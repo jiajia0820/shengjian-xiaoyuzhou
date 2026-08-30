@@ -48,14 +48,25 @@ async function buildChunkNotes(
       const index = nextIndex;
       nextIndex += 1;
     const focus = kind === "summary"
-      ? `为后续按指定框架汇总提取材料。框架关注点如下：\n${frameworkInstructions}`
+      ? `为后续按指定框架生成展开版内容梳理提取材料。
+不要只摘录结论，不要生成最终梳理。
+请提取证据卡片，记录：
+- 本段主题及其在整期节目中的位置；
+- 观点提出的上下文、论证步骤、比较和观点变化；
+- 具体论据、故事、案例、数字、对比、限定条件和反例；
+- 可支持判断的短引文或忠实转述；
+- 原文时间戳（原文已有的时间戳）及其对应内容，没有可靠时间戳写“不确定”；
+- 文稿中能可靠识别的说话人及其立场，无法确认标记“不确定”；
+- 与前后段衔接或冲突的线索。
+框架关注点如下：
+${frameworkInstructions}`
       : `为后续生成“听众听完本期播客后，与主播进行深度探讨”的学习 Prompt 提取材料。
 请重点记录：主题与观点、播客明确提及的概念及其上下文、不同人物各自的观点、立场、表达习惯与论证方式，以及案例、方法、争议、行动建议和时间戳证据。
 同时根据内容长度与知识密度整理适合阶段化对谈的学习顺序，标出不同人物可以提供的互补或冲突视角，避免多个阶段围绕同一个方面重复扩展。`;
     const note = await runModel(config, {
       instructions: `${SECURITY_INSTRUCTIONS}\n\n你正在处理全文的第 ${index + 1}/${chunks.length} 部分。请生成高密度事实笔记，避免提前写最终成稿。`,
       input: `${focus}\n\n<document-part>\n${chunks[index]}\n</document-part>`,
-      maxOutputTokens: 1_600,
+      maxOutputTokens: 2_000,
     });
       notes[index] = `## 文稿分段 ${index + 1}\n\n${note}`;
     }
@@ -91,7 +102,9 @@ export async function generateAnalysisBody(args: {
 框架名称：${args.frameworkName}
 <framework>
 ${args.frameworkInstructions}
-</framework>`,
+</framework>
+
+展开规则：用自然段交代原文脉络和论证过程；优先引用或转述具体论据、案例、限定条件和时间戳；不要把每个小点只写成一句结论；不要为了达到字数重复；信息不足写“不确定”，不要用常识补齐。`,
       input: `单集：${args.episode.title}
 播客：${args.episode.podcast_title}
 输入类型：${materialLabel}
@@ -99,7 +112,7 @@ ${args.frameworkInstructions}
 <document>
 ${sourceMaterial}
 </document>`,
-      maxOutputTokens: 3_000,
+      maxOutputTokens: 4_000,
     });
   }
 
