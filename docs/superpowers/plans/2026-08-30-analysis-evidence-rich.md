@@ -25,7 +25,7 @@
 - Modify: tests/core.test.ts:1541-1554
 - Modify: tests/rendered-html.test.mjs:455-478
 
-- [ ] **Step 1: 在核心测试中扩展系统框架断言**
+- [x] **Step 1: 在核心测试中扩展系统框架断言**
 
 在现有 test("validates reusable Markdown analysis frameworks", ...) 中保留原有断言，并加入以下断言，锁定最终框架必须要求证据展开而非只给结论：
 
@@ -38,7 +38,7 @@
   assert.match(SYSTEM_FRAMEWORK.instructions, /禁止为了达到长度重复/);
 ~~~
 
-- [ ] **Step 2: 在静态分析测试中锁定分段和最终摘要提示**
+- [x] **Step 2: 在静态分析测试中锁定分段和最终摘要提示**
 
 在 tests/rendered-html.test.mjs 的 generates staged podcast-host learning prompts 测试之后新增一个测试，读取 ../lib/analysis.ts，加入下列断言：
 
@@ -59,7 +59,7 @@ test("保留内容梳理的原文证据和分段上下文", async () => {
 });
 ~~~
 
-- [ ] **Step 3: 运行新增测试，确认它们因实现尚未更新而失败**
+- [x] **Step 3: 运行新增测试，确认它们因实现尚未更新而失败**
 
 Run:
 
@@ -77,7 +77,7 @@ Expected: 构建成功，但新增断言至少出现一次 AssertionError，原�
 - Modify: lib/frameworks.ts:12-30
 - Test: tests/core.test.ts:1541-1554
 
-- [ ] **Step 1: 替换系统框架的目标和输出结构文本**
+- [x] **Step 1: 替换系统框架的目标和输出结构文本**
 
 保留六个部分的名称和安全边界，在 SYSTEM_FRAMEWORK.instructions 中将摘要协议更新为以下内容：
 
@@ -107,7 +107,7 @@ instructions: `# 内容梳理目标
 
 六个栏目仍保持兼容，旧自定义框架和已保存分析不会被改写；系统框架只是下次重新生成时使用新指令。
 
-- [ ] **Step 2: 运行核心测试确认框架规则通过**
+- [x] **Step 2: 运行核心测试确认框架规则通过**
 
 Run:
 
@@ -117,7 +117,7 @@ node --experimental-strip-types --test tests/core.test.ts
 
 Expected: validates reusable Markdown analysis frameworks 和其余核心测试全部 PASS。
 
-- [ ] **Step 3: 提交仅包含框架文件的变更**
+- [x] **Step 3: 提交仅包含框架文件的变更**
 
 ~~~bash
 git add -- lib/frameworks.ts tests/core.test.ts
@@ -133,7 +133,7 @@ git commit -m "feat: expand content summary framework with evidence"
 - Modify: lib/analysis.ts:36-104
 - Test: tests/rendered-html.test.mjs 中本次新增静态测试
 
-- [ ] **Step 1: 在摘要分段 focus 中加入证据卡片规则**
+- [x] **Step 1: 在摘要分段 focus 中加入证据卡片规则**
 
 保留学习 Prompt 分支原文不变，只把 kind === "summary" 的 focus 改为以下完整指令：
 
@@ -156,17 +156,17 @@ ${frameworkInstructions}`
 
 这段指令要继续放在现有 <document-part> 输入之前，避免把文稿中的文字当成模型指令。
 
-- [ ] **Step 2: 提高分段事实笔记预算并保持并发策略**
+- [x] **Step 2: 提高分段事实笔记预算并保持并发策略**
 
-将摘要和学习 Prompt 共用的 maxOutputTokens 从 1_600 改为 2_000：
+摘要分段使用 2_000，learning_prompt 分段保持 1_600：
 
 ~~~ts
       maxOutputTokens: 2_000,
 ~~~
 
-保留 Math.min(3, chunks.length) 的并发上限、数组顺序和 ## 文稿分段 N 标题，确保长文顺序与覆盖范围不变。
+保留 Math.min(3, chunks.length) 的并发上限（最多 3 并发不变）、数组顺序和 ## 文稿分段 N 标题，确保长文顺序与覆盖范围不变。
 
-- [ ] **Step 3: 给摘要最终模型增加展开提醒并提高预算**
+- [x] **Step 3: 给摘要最终模型增加展开提醒并提高预算**
 
 在摘要分支现有框架说明之后加入以下文字，不覆盖框架或安全规则：
 
@@ -182,7 +182,7 @@ ${frameworkInstructions}`
 
 学习 Prompt 分支继续使用 5_200，不改变其生成规则。
 
-- [ ] **Step 4: 运行静态回归测试确认提示词和预算已接线**
+- [x] **Step 4: 运行静态回归测试确认提示词和预算已接线**
 
 Run:
 
@@ -193,7 +193,7 @@ node --experimental-strip-types --test tests/rendered-html.test.mjs
 
 Expected: 构建成功；“保留内容梳理的原文证据和分段上下文”测试 PASS；学习 Prompt 相关测试仍 PASS。
 
-- [ ] **Step 5: 提交分析链路变更**
+- [x] **Step 5: 提交分析链路变更**
 
 ~~~bash
 git add -- lib/analysis.ts tests/rendered-html.test.mjs
@@ -210,7 +210,7 @@ git commit -m "feat: preserve evidence when summarizing long transcripts"
 - Test: tests/rendered-html.test.mjs
 - Test: package scripts（只读检查，不修改）
 
-- [ ] **Step 1: 运行完整自动化测试**
+- [x] **Step 1: 运行完整自动化测试**
 
 ~~~bash
 npm test
@@ -218,7 +218,7 @@ npm test
 
 Expected: 构建成功，完整测试集全部 PASS，且无新增失败。
 
-- [ ] **Step 2: 运行 lint 和差异检查**
+- [x] **Step 2: 运行 lint 和差异检查**
 
 ~~~bash
 npm run lint
@@ -227,7 +227,7 @@ git diff --check HEAD~2..HEAD
 
 Expected: ESLint 无错误；Git 无空白错误。若提交数量因执行顺序不同，使用 git diff --check 检查本次修改涉及的提交范围，不触碰其他工作树改动。
 
-- [ ] **Step 3: 进行一篇短文的实际生成验收**
+- [x] **Step 3: 进行一篇短文的实际生成验收**
 
 使用包含至少两个观点、一个具体案例和时间戳的现有播客文稿，在网页中重新生成“内容梳理”，检查：
 
@@ -237,7 +237,7 @@ Expected: ESLint 无错误；Git 无空白错误。若提交数量因执行顺�
 4. 文稿信息少时结果可以短于 1,500 字；信息丰富时不被 1,200 字旧限制截断。
 5. 重新生成不会影响声纹结果、学习 Prompt、历史分析读取和文稿过期判断。
 
-- [ ] **Step 4: 记录验证结果并检查工作树边界**
+- [x] **Step 4: 记录验证结果并检查工作树边界**
 
 ~~~bash
 git status --short --branch
@@ -246,9 +246,15 @@ git log -3 --oneline --decorate
 
 Expected: 本次新增的设计、框架和分析提交清晰可见；用户此前未提交的其他文件仍保持原状，没有被暂存或覆盖。
 
+## 审查后加固
+
+- [x] **Task 5：运行时回归测试** — tests/core.test.ts 已覆盖真实 ModelRequest 运行时行为：短 summary、短 learning_prompt、长 summary 的预算、证据提示、最多 3 并发和结果顺序；未虚构真实 provider 验收。
+- [x] **Task 6：可选执行器注入** — lib/analysis.ts 已支持可选 executeModel 注入；未传入时默认使用 executeModelRequest，保持既有调用行为。
+
 ## 计划自检
 
 - 设计文档中的目标、非目标、六部分展开协议、长文证据卡片、安全边界、预算和回滚方式均由 Task 2–4 覆盖。
 - 没有新增数据库字段、路由参数或页面状态，历史结果兼容性由 Task 4 验收。
 - “通常 1,500–2,500 字”明确为软目标，与“按信息量自然展开、禁止凑字数”一致。
 - 分段事实笔记仍明确“不生成最终梳理”，最终模型仍接收框架指令和证据材料，类型和调用签名不变。
+- 计划自检已补充审查后加固：Task 5 的运行时回归测试和 Task 6 的可选 executeModel 注入均已完成，且未将真实 provider 验收写成已执行事项。
