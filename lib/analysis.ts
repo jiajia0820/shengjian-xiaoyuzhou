@@ -3,6 +3,7 @@ import {
   executeModelRequest,
   type AiRuntimeConfig,
   type ModelRequest,
+  type ModelResponse,
 } from "./ai-provider";
 import {
   ANALYSIS_MODEL,
@@ -17,12 +18,21 @@ export type { AnalysisKind, AnalysisSource };
 
 const MAX_DOCUMENT_CHARS = 400_000;
 
+type AnalysisModelExecutor = (
+  config: AiRuntimeConfig,
+  request: ModelRequest,
+) => Promise<Pick<ModelResponse, "text">>;
+
 function charLength(value: string): number {
   return Array.from(value).length;
 }
 
-async function runModel(config: AiRuntimeConfig, request: ModelRequest): Promise<string> {
-  const response = await executeModelRequest(config, request);
+async function runModel(
+  config: AiRuntimeConfig,
+  request: ModelRequest,
+  executeModel: AnalysisModelExecutor = executeModelRequest,
+): Promise<string> {
+  const response = await executeModel(config, request);
   return response.text;
 }
 
@@ -39,6 +49,7 @@ async function buildChunkNotes(
   config: AiRuntimeConfig,
   chunks: string[],
   kind: AnalysisKind,
+  executeModel: AnalysisModelExecutor,
   frameworkInstructions?: string,
 ): Promise<string> {
   const notes = new Array<string>(chunks.length);
@@ -48,15 +59,27 @@ async function buildChunkNotes(
       const index = nextIndex;
       nextIndex += 1;
     const focus = kind === "summary"
-      ? `为后续按指定框架汇总提取材料。框架关注点如下：\n${frameworkInstructions}`
+      ? `为后续按指定框架生成展开版内容梳理提取材料。
+不要只摘录结论，不要生成最终梳理。
+请提取证据卡片，记录：
+- 根据分段编号和当前可见内容能够确认的段落位置；无法从本段确认整期位置时写“不确定”；
+- 观点提出的上下文、论证步骤、比较和观点变化；
+- 具体论据、故事、案例、数字、对比、限定条件和反例；
+- 可支持判断的短引文或忠实转述；
+- 原文时间戳（原文已有的时间戳）及其对应内容，没有可靠时间戳写“不确定”；
+- 文稿中能可靠识别的说话人及其立场，无法确认标记“不确定”；
+- 仅记录本段可观察到的衔接线索，不推断未提供的前后段内容，无法确认与前后段关系时写“不确定”。
+框架关注点如下：
+${frameworkInstructions}`
       : `为后续生成“听众听完本期播客后，与主播进行深度探讨”的学习 Prompt 提取材料。
 请重点记录：主题与观点、播客明确提及的概念及其上下文、不同人物各自的观点、立场、表达习惯与论证方式，以及案例、方法、争议、行动建议和时间戳证据。
 同时根据内容长度与知识密度整理适合阶段化对谈的学习顺序，标出不同人物可以提供的互补或冲突视角，避免多个阶段围绕同一个方面重复扩展。`;
     const note = await runModel(config, {
       instructions: `${SECURITY_INSTRUCTIONS}\n\n你正在处理全文的第 ${index + 1}/${chunks.length} 部分。请生成高密度事实笔记，避免提前写最终成稿。`,
       input: `${focus}\n\n<document-part>\n${chunks[index]}\n</document-part>`,
-      maxOutputTokens: 1_600,
-    });
+      // summary maxOutputTokens: 2_000; learning_prompt maxOutputTokens: 1_600
+      maxOutputTokens: kind === "summary" ? 2_000 : 1_600,
+    }, executeModel);
       notes[index] = `## 文稿分段 ${index + 1}\n\n${note}`;
     }
   }
@@ -71,7 +94,9 @@ export async function generateAnalysisBody(args: {
   episode: EpisodeRecord;
   frameworkName?: string;
   frameworkInstructions?: string;
+  executeModel?: AnalysisModelExecutor;
 }): Promise<string> {
+  const executeModel = args.executeModel ?? executeModelRequest;
   const length = charLength(args.markdown);
   if (length > MAX_DOCUMENT_CHARS) {
     throw new HttpError(413, "ANALYSIS_DOCUMENT_TOO_LARGE", "文稿超过 400,000 字，暂时无法进行全文分析");
@@ -79,7 +104,7 @@ export async function generateAnalysisBody(args: {
   const chunks = splitForAnalysis(args.markdown);
   const sourceMaterial = chunks.length === 1
     ? args.markdown
-    : await buildChunkNotes(args.config, chunks, args.kind, args.frameworkInstructions);
+    : await buildChunkNotes(args.config, chunks, args.kind, executeModel, args.frameworkInstructions);
   const materialLabel = chunks.length === 1 ? "完整播客文稿" : "覆盖完整文稿的分段事实笔记";
 
   if (args.kind === "summary") {
@@ -91,7 +116,9 @@ export async function generateAnalysisBody(args: {
 框架名称：${args.frameworkName}
 <framework>
 ${args.frameworkInstructions}
-</framework>`,
+</framework>
+
+展开规则：用自然段交代原文脉络和论证过程；优先引用或转述具体论据、案例、限定条件和时间戳；不要把每个小点只写成一句结论；不要为了达到字数重复；信息不足写“不确定”，不要用常识补齐。`,
       input: `单集：${args.episode.title}
 播客：${args.episode.podcast_title}
 输入类型：${materialLabel}
@@ -99,8 +126,8 @@ ${args.frameworkInstructions}
 <document>
 ${sourceMaterial}
 </document>`,
-      maxOutputTokens: 3_000,
-    });
+      maxOutputTokens: 4_000,
+    }, executeModel);
   }
 
   return runModel(args.config, {
@@ -162,5 +189,5 @@ Prompt 必须明确：接收方 AI 并未持有原始播客文稿；它只能使
 ${sourceMaterial}
 </document>`,
     maxOutputTokens: 5_200,
-  });
+  }, executeModel);
 }

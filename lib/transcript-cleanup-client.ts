@@ -48,10 +48,10 @@ export function cleanupProgressLabel(progress: CleanupProgress): string {
   const batch = typeof progress.batchIndex === "number" && typeof progress.batchCount === "number"
     ? ` · 第 ${progress.batchIndex + 1}/${progress.batchCount} 批` : "";
   if (stage === "parsing") return `正在解析文稿${batch}`;
-  if (stage === "processing") return `AI 正在清理${batch}`;
-  if (stage === "saving") return "正在保存清理结果…";
-  if (stage === "complete") return "AI 清理完成";
-  return stage ? `AI 清理：${stage}${batch}` : "AI 处理中…";
+  if (stage === "processing") return `AI 正在整理${batch}`;
+  if (stage === "saving") return "正在保存整理结果…";
+  if (stage === "complete") return "AI 整理完成";
+  return stage ? `AI 整理：${stage}${batch}` : "AI 处理中…";
 }
 
 export async function consumeCleanupResponse(
@@ -60,7 +60,7 @@ export async function consumeCleanupResponse(
 ): Promise<CleanupPayload> {
   if (!response.ok) {
     const data = await response.json().catch(() => ({})) as { message?: string };
-    throw new Error(data.message || "AI 清理失败，请稍后重试");
+    throw new Error(data.message || "AI 整理失败，请稍后重试");
   }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!contentType.includes("text/event-stream") || !response.body) {
@@ -82,7 +82,7 @@ export async function consumeCleanupResponse(
       dataLines = [];
       if (!progress) return;
       onProgress(progress);
-      if (progress.type === "error") throw new Error(progress.message || "AI 清理失败，请稍后重试");
+      if (progress.type === "error") throw new Error(progress.message || "AI 整理失败，请稍后重试");
       if (progress.type === "complete" && progress.result) completed = progress.result;
     };
     for (const line of lines) {
@@ -104,6 +104,6 @@ export async function consumeCleanupResponse(
   } finally {
     try { reader.releaseLock(); } catch { /* noop */ }
   }
-  if (!completed) throw new Error("AI 清理未返回完成结果，请稍后重试");
+  if (!completed) throw new Error("AI 整理未返回完成结果，请稍后重试");
   return completed;
 }

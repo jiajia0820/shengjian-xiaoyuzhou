@@ -187,6 +187,24 @@ test("all rejected blocks return 502 even when provider batches completed", asyn
   assert.equal(setup.putCalls.length, 0);
 });
 
+test("本地保底批次数等于片段数时仍允许保存成功结果", async () => {
+  const setup = baseDeps();
+  setup.deps["@/lib/transcript-cleanup-ai"].runTranscriptCleanup = async () => ({
+    markdown: beforeMarkdown.replace("嗯嗯 ", ""),
+    document: { blocks: [{ id: "b1" }] },
+    sourceDocument: { blocks: [{ id: "b1" }] },
+    stats: { processedBlocks: 1, changedBlocks: 1, fillerRemoved: 1, repetitionsMerged: 0, typosFixed: 0, punctuationAdjusted: 0, unprocessedBlocks: 0 },
+    failedBatchCount: 1,
+    rejectedIds: [],
+    provider: "custom",
+    model: "test-model",
+  });
+  const route = await loadRoute(setup.deps);
+  const response = await route.POST(new Request("https://app.test", { method: "POST", body: JSON.stringify({ currentHash: hash(beforeMarkdown) }) }), { params: Promise.resolve({ eid: "ep-1" }) });
+  assert.equal(response.status, 200);
+  assert.equal(setup.current, beforeMarkdown.replace("嗯嗯 ", ""));
+});
+
 test("quota exhaustion and lease conflict are safe errors", async () => {
   const setup = baseDeps();
   setup.deps["@/lib/db"].consumeUsage = async () => false;

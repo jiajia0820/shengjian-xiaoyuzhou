@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateVoiceprintReferences } from "../lib/voiceprint.ts";
+import { parseVoiceprintTimestamp, validateVoiceprintReferences } from "../lib/voiceprint.ts";
+
+test("解析两人声纹参考位置的分秒格式", () => {
+  assert.equal(parseVoiceprintTimestamp("10:39"), 639_000);
+  assert.equal(parseVoiceprintTimestamp("90:05"), 5_405_000);
+  assert.equal(parseVoiceprintTimestamp("10：39"), 639_000);
+  assert.equal(parseVoiceprintTimestamp("10分39秒"), 639_000);
+  assert.equal(parseVoiceprintTimestamp("10:60"), null);
+  assert.equal(parseVoiceprintTimestamp("10"), null);
+});
 
 test("浏览器端接受 5–30 秒参考并拒绝过短、超时和重叠", () => {
   assert.equal(validateVoiceprintReferences({

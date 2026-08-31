@@ -69,6 +69,7 @@ test("wires a remote episode-audio speaker review panel into the transcript tool
   assert.match(panel, /validateVoiceprintReferences/);
   assert.match(panel, /mode: "voiceprint"/);
   assert.match(panel, /references/);
+  assert.match(panel, />识别说话人<\/button>/);
   assert.doesNotMatch(panel, /<input[^>]+type="file"/);
   assert.doesNotMatch(panel, /选择本地音频/);
   assert.doesNotMatch(panel, /AUDIO_ACCEPT/);
@@ -80,13 +81,137 @@ test("wires a remote episode-audio speaker review panel into the transcript tool
   assert.doesNotMatch(client, /credentials:\s*["']include["']/);
 });
 
+test("removes the redundant speaker modal audio processing description", async () => {
+  const panel = await readFile(new URL("../app/speaker-diarization-panel.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(panel, /系统从当前小宇宙单集获取官方音频/);
+});
+
+test("uses fixed two-speaker voiceprint inputs in minutes and seconds", async () => {
+  const panel = await readFile(new URL("../app/speaker-diarization-panel.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(panel, /识别模式/);
+  assert.doesNotMatch(panel, /说话人数/);
+  assert.doesNotMatch(panel, /全自动识别|自动判断/);
+  assert.match(panel, /两人声纹/);
+  assert.match(panel, /开始（分:秒）/);
+  assert.match(panel, /结束（分:秒）/);
+  assert.match(panel, /type="text"/);
+  assert.match(panel, /placeholder="例如 10:39"/);
+  assert.match(panel, /parseVoiceprintTimestamp/);
+});
+
+test("keeps the speaker modal close control visible without an action color bar", async () => {
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const closeRule = styles.match(/\.speaker-diarization-modal\s*>\s*\.modal-close\s*\{([^}]*)\}/)?.[1] ?? "";
+  const actionRules = styles.match(/\.speaker-modal-actions\s*\{([^}]*)\}/g) ?? [];
+
+  assert.match(closeRule, /position:\s*sticky/);
+  assert.match(closeRule, /top:\s*\d+/);
+  assert.match(closeRule, /z-index:\s*\d+/);
+  assert.match(closeRule, /align-self:\s*flex-end/);
+  assert.ok(actionRules.length > 0);
+  for (const rule of actionRules) assert.match(rule, /background:\s*transparent/);
+});
+
+test("centers speaker progress text inside its status background", async () => {
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const progressRule = styles.match(/\.speaker-progress\s*\{([^}]*)\}/)?.[1] ?? "";
+
+  assert.match(progressRule, /display:\s*flex/);
+  assert.match(progressRule, /align-items:\s*center/);
+  assert.match(progressRule, /min-height:\s*40px/);
+});
+
+test("lets the document drawer scroll as one reading surface", async () => {
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const drawer = styles.match(/\.document-drawer\s*\{([^}]*)\}/)?.[1] ?? "";
+  const body = styles.match(/\.document-body\s*\{([^}]*)\}/)?.[1] ?? "";
+
+  assert.match(drawer, /display:\s*flex/);
+  assert.match(drawer, /flex-direction:\s*column/);
+  assert.match(drawer, /overflow-y:\s*auto/);
+  assert.match(drawer, /overflow-x:\s*hidden/);
+  assert.doesNotMatch(drawer, /grid-template-rows/);
+  assert.match(body, /flex:\s*0\s+0\s+auto/);
+  assert.match(body, /overflow:\s*visible/);
+});
+
+test("keeps the drawer title and tabs fixed while its content scrolls", async () => {
+  const [workspace, styles] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /<div className="document-sticky-header">[\s\S]*<div className="drawer-header">[\s\S]*<nav className="document-tabs"/);
+  assert.match(styles, /\.document-sticky-header\s*\{[^}]*position:\s*sticky/);
+  assert.match(styles, /\.document-sticky-header\s*\{[^}]*top:\s*0/);
+  assert.match(styles, /\.document-sticky-header\s*\{[^}]*z-index:\s*\d+/);
+  assert.match(styles, /\.document-sticky-header\s*\{[^}]*background:\s*#fffdf7/);
+});
+
+test("groups transcript actions and tucks source and destructive actions into more", async () => {
+  const [workspace, styles] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  const toolbarStart = workspace.indexOf('<div className="document-toolbar">');
+  const toolbarEnd = workspace.indexOf('<div className="document-body">', toolbarStart);
+  assert.ok(toolbarStart >= 0 && toolbarEnd > toolbarStart, "transcript toolbar must remain present");
+  const toolbar = workspace.slice(toolbarStart, toolbarEnd);
+  const moreStart = toolbar.indexOf('className="document-more-actions"');
+  assert.ok(moreStart > 0, "secondary actions must have a dedicated more menu");
+  const primary = toolbar.slice(0, moreStart);
+
+  assert.match(primary, /document-action-scroll/);
+  assert.match(primary, />复制<\/button>/);
+  assert.match(primary, />下载 \.md<\/button>/);
+  assert.match(primary, />AI 整理<\/button>/);
+  assert.match(primary, /<SpeakerDiarizationPanel/);
+  assert.doesNotMatch(primary, /重新获取原稿|恢复原稿|删除文稿/);
+  assert.match(toolbar, /<details className="document-more-actions">/);
+  assert.match(toolbar, /<summary>更多<\/summary>/);
+  assert.match(toolbar, /document-more-menu/);
+  assert.match(toolbar, /重新获取原稿/);
+  assert.doesNotMatch(toolbar, /恢复原稿/);
+  assert.match(toolbar, /删除文稿/);
+  assert.match(styles, /\.document-action-scroll\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(styles, /\.document-actions\s*\{[^}]*margin-left:\s*auto/);
+  assert.match(styles, /\.document-action-scroll\s*\{[^}]*justify-content:\s*flex-end/);
+  assert.match(styles, /\.document-more-actions\s*\{[^}]*position:\s*relative/);
+  assert.match(styles, /\.document-more-menu\s*\{[^}]*position:\s*absolute/);
+});
+
+test("hides the episode metadata block only from transcript reading preview", async () => {
+  const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
+  assert.match(workspace, /function stripEpisodeMetaFromPreview/);
+  assert.match(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta \/>/);
+  assert.match(workspace, /<MarkdownPreview markdown=\{analysisMarkdown\} analysisPreview=\{documentTab === "summary"\} \/>/);
+  assert.match(workspace, /节目：/);
+  assert.match(workspace, /原始单集：/);
+});
+
+test("仅为内容梳理预览启用重复标题过滤并统一标题样式", async () => {
+  const [workspace, styles] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /stripRedundantAnalysisHeading/);
+  assert.match(workspace, /analysisPreview=\{documentTab === "summary"\}/);
+  assert.match(workspace, /className=\{analysisPreview \? "markdown-preview analysis-preview"/);
+  assert.match(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta \/>/);
+  assert.match(styles, /\.markdown-preview h1\s*\{[^}]*font-size:\s*clamp\(28px, 3\.6vw, 42px\)/);
+  assert.doesNotMatch(styles, /\.analysis-preview h1\s*\{/);
+});
+
 test("wires AI transcript cleanup controls and hash-protected requests", async () => {
   const [workspace, cleanupRoute] = await Promise.all([
     readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/episodes/[eid]/cleanup/route.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(workspace, /AI 清理文稿/);
-  assert.match(workspace, /撤销 AI 清理/);
+  assert.match(workspace, /AI 整理/);
+  assert.match(workspace, /撤销 AI 整理/);
+  assert.doesNotMatch(workspace, />AI 清理文稿<\/button>/);
+  assert.doesNotMatch(workspace, />撤销 AI 清理<\/button>/);
   assert.match(workspace, /cleanupProcessing/);
   assert.match(workspace, /cleanupProgress/);
   assert.match(workspace, /cleanupStats/);
@@ -117,6 +242,7 @@ test("wires AI transcript cleanup controls and hash-protected requests", async (
   assert.match(workspace, /repetitionsMerged|repetition/);
   assert.match(workspace, /typosFixed|typo/);
   assert.match(workspace, /unprocessedBlocks|unprocessed/);
+  assert.match(workspace, /cleanupFallbackBatches|模型输出异常|本地规则保底/);
   assert.match(workspace, /disabled=\{cleanupProcessing/);
 });
 
@@ -125,7 +251,7 @@ test("shows chunk progress for long local speaker jobs", async () => {
   assert.match(panel, /第 \$\{chunkIndex\}\/\$\{chunkCount\} 块/);
 });
 
-test("documents the two-speaker voiceprint workflow and fallback", async () => {
+test("documents the fixed two-speaker voiceprint workflow", async () => {
   const [rootReadme, localReadme] = await Promise.all([
     readFile(new URL("../README.md", import.meta.url), "utf8"),
     readFile(new URL("../local-audio-service/README.md", import.meta.url), "utf8"),
@@ -133,10 +259,12 @@ test("documents the two-speaker voiceprint workflow and fallback", async () => {
   for (const content of [rootReadme, localReadme]) {
     assert.match(content, /已有小宇宙文稿/);
     assert.match(content, /5[–-]30 秒/);
+    assert.match(content, /固定使用[“"]?两人声纹/);
+    assert.match(content, /分:秒/);
     assert.match(content, /低置信度/);
     assert.match(content, /Hugging Face/);
     assert.match(content, /本机处理/);
-    assert.match(content, /全自动/);
+    assert.doesNotMatch(content, /选择[“"]?全自动识别|切换回全自动识别|全自动模式/);
   }
 });
 
@@ -347,4 +475,19 @@ test("generates staged podcast-host learning prompts", async () => {
   assert.match(analysis, /本期播客的学习对话已结束/);
   assert.match(analysis, /单集时长/);
   assert.match(analysis, /不得声称自己是真人/);
+});
+
+test("保留内容梳理的原文证据和分段上下文", async () => {
+  const analysis = await readFile(new URL("../lib/analysis.ts", import.meta.url), "utf8");
+
+  assert.match(analysis, /观点提出的上下文/);
+  assert.match(analysis, /论证步骤/);
+  assert.match(analysis, /具体论据、故事、案例/);
+  assert.match(analysis, /限定条件和反例/);
+  assert.match(analysis, /短引文或忠实转述/);
+  assert.match(analysis, /原文时间戳/);
+  assert.match(analysis, /不要只摘录结论/);
+  assert.match(analysis, /不要生成最终梳理/);
+  assert.match(analysis, /maxOutputTokens: 2_000/);
+  assert.match(analysis, /maxOutputTokens: 4_000/);
 });

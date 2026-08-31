@@ -16,6 +16,17 @@ export const VOICEPRINT_LABELS = {
 export const MIN_VOICEPRINT_REFERENCE_MS = 5_000;
 export const MAX_VOICEPRINT_REFERENCE_MS = 30_000;
 
+export function parseVoiceprintTimestamp(value: string): number | null {
+  const normalized = value.trim().replace(/\s+/g, "").replace(/：/g, ":");
+  const match = /^(\d+):([0-5]?\d)$/.exec(normalized)
+    ?? /^(\d+)分([0-5]?\d)秒$/.exec(normalized);
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  const seconds = Number(match[2]);
+  const milliseconds = (minutes * 60 + seconds) * 1000;
+  return Number.isSafeInteger(milliseconds) ? milliseconds : null;
+}
+
 function validMs(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -43,7 +54,7 @@ export function validateVoiceprintReferences(
   }
   const ranges = speakerIds.map((id) => value[id]);
   if (ranges.some((range) => !validRange(range))) {
-    return "参考时间必须是有效的开始和结束秒数";
+    return "参考时间必须是有效的分:秒位置";
   }
   const [host, guest] = ranges as VoiceprintReferenceRange[];
   for (const range of [host, guest]) {
