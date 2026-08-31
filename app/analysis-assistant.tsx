@@ -125,7 +125,17 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
     <aside className={`analysis-assistant${isCollapsed ? " is-collapsed" : ""}`} aria-label="AI 助手">
       <header className="analysis-assistant-header">
         <div className="analysis-assistant-header-copy">
-          <h3>AI 助手</h3>
+          <div className="analysis-assistant-title-row">
+            <h3>AI 助手</h3>
+            <details className="analysis-assistant-identity">
+              <summary><span>{role}</span></summary>
+              <div className="analysis-assistant-identity-body">
+                <label htmlFor="analysis-assistant-role">身份</label>
+                <input id="analysis-assistant-role" value={role} maxLength={160} onChange={(event) => setRole(event.target.value)} />
+                <small>只决定解释角度，事实以本期文稿为准。</small>
+              </div>
+            </details>
+          </div>
         </div>
         <div className="analysis-assistant-header-actions">
           <button
@@ -140,15 +150,6 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
       </header>
 
       <div className="analysis-assistant-content" hidden={isCollapsed}>
-        <details className="analysis-assistant-details">
-          <summary><span>回答身份</span><small>{role}</small></summary>
-          <div className="analysis-assistant-details-body">
-            <label htmlFor="analysis-assistant-role">回答身份</label>
-            <input id="analysis-assistant-role" value={role} maxLength={160} onChange={(event) => setRole(event.target.value)} />
-            <small>只决定解释角度，事实以本期文稿为准。</small>
-          </div>
-        </details>
-
         <details className="analysis-assistant-details">
           <summary><span>本次引用</span><small>{context ? contextLabel(context) : "梳理小节 + 官方原文片段"}</small></summary>
           <blockquote className="analysis-assistant-details-quote" role="status" aria-live="polite">{selectedText}</blockquote>
