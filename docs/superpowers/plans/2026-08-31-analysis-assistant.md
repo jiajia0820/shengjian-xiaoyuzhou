@@ -28,11 +28,11 @@ test("extracts the selected summary section", () => {
 
 test("uses a ninety-second timestamp window and caps source text", () => {
   const result = buildOriginalContext(
-    "[00:10:00] 甲\n[00:11:00] 乙\n[00:12:40] 丙\n[00:14:00] 丁",
+    "[00:10:00] 甲\n[00:11:00] 乙\n[00:12:20] 丙\n[00:14:00] 丁",
     "[00:11:00] 选中的观点",
   );
   assert.equal(result.source, "official_timestamp");
-  assert.deepEqual(result.timestamps, ["00:10:00", "00:11:00", "00:12:40"]);
+  assert.deepEqual(result.timestamps, ["00:10:00", "00:11:00", "00:12:20"]);
   assert.doesNotMatch(result.text, /00:14:00/);
 });
 
