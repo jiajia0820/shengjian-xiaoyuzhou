@@ -244,6 +244,7 @@ export default function Workspace({
   const selectedSlot = documentTab === "summary" ? `summary:${selectedFrameworkId}`
     : documentTab === "learning_prompt" ? "learning_prompt" : "";
   const selectedAnalysis = analysisResults.find((result) => result.slot === selectedSlot) ?? null;
+  const hasLegacyLearningPrompt = analysisResults.some((result) => result.kind === "learning_prompt");
   const selectedFramework = frameworkOptions.find((item) => item.id === selectedFrameworkId) ?? null;
 
   async function sendCode() {
@@ -473,7 +474,7 @@ export default function Workspace({
     const episode = selected;
     if (!episode || cleanupProcessing) return;
     const confirmed = window.confirm(
-      `永久删除“${episode.title}”？官方原稿、编辑稿、内容梳理和学习 Prompt 都会删除，且无法恢复。`,
+      `永久删除“${episode.title}”？官方原稿、编辑稿和历史分析结果都会删除，且无法恢复。`,
     );
     if (!confirmed) return;
     setDeletingEid(episode.eid);
@@ -550,7 +551,7 @@ export default function Workspace({
   }
 
   async function generateAnalysis() {
-    if (!selected || documentTab === "transcript" || cleanupProcessing) return;
+    if (!selected || documentTab !== "summary" || cleanupProcessing) return;
     if (!aiSettings.defaultProvider) {
       setAiModalOpen(true);
       setNotice({ kind: "info", text: "请先设置 AI 提供商" });
@@ -567,15 +568,15 @@ export default function Workspace({
         await apiFetch(`/api/episodes/${selected.eid}/analyses/generate`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            kind: documentTab === "summary" ? "summary" : "learning_prompt",
+            kind: "summary",
             source: analysisSource,
-            frameworkId: documentTab === "summary" ? selectedFrameworkId : undefined,
+            frameworkId: selectedFrameworkId,
           }),
         }),
       );
       setAnalysisMarkdown(data.markdown);
       setAnalysisResults((results) => [data.result, ...results.filter((item) => item.slot !== data.result.slot)]);
-      setNotice({ kind: "success", text: documentTab === "summary" ? "内容梳理已生成" : "学习 Prompt 已生成" });
+      setNotice({ kind: "success", text: "内容梳理已生成" });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "AI 生成失败，旧结果已保留" });
     } finally {
@@ -635,7 +636,7 @@ export default function Workspace({
       applyAiSettings(status);
       closeAiModal();
       if (!account?.connected) setSetupGuideOpen(true);
-      setNotice({ kind: "success", text: "DeepSeek 已连接，可以开始生成内容梳理和学习 Prompt" });
+      setNotice({ kind: "success", text: "DeepSeek 已连接，可以开始生成内容梳理" });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "DeepSeek 设置保存失败" });
     } finally {
@@ -659,7 +660,7 @@ export default function Workspace({
       syncCustomDraft(status.providers.custom);
       closeAiModal();
       if (!account?.connected) setSetupGuideOpen(true);
-      setNotice({ kind: "success", text: "自定义 API 已连接，可以开始生成内容梳理和学习 Prompt" });
+      setNotice({ kind: "success", text: "自定义 API 已连接，可以开始生成内容梳理" });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "自定义 API 设置保存失败" });
     } finally {
@@ -856,7 +857,7 @@ export default function Workspace({
             <button className="modal-close" type="button" onClick={() => setSetupGuideOpen(false)} aria-label="关闭">×</button>
             <span className="modal-kicker">START HERE</span>
             <h2 id="setup-guide-title">进入声笺前，确认两项连接</h2>
-            <p>连接后即可提取官方文稿，并使用 AI 生成内容梳理与学习 Prompt。</p>
+            <p>连接后即可提取官方文稿，并使用 AI 生成内容梳理。</p>
             <div className="setup-steps">
               <article className={account?.connected ? "complete" : ""}>
                 <span className="setup-step-no">01</span>
@@ -868,7 +869,7 @@ export default function Workspace({
               </article>
               <article className={aiSettings.defaultProvider ? "complete" : ""}>
                 <span className="setup-step-no">02</span>
-                <div><h3>设置 AI 提供商</h3><p>连接 DeepSeek 或自定义 API，用于生成内容梳理和学习 Prompt。</p></div>
+                <div><h3>设置 AI 提供商</h3><p>连接 DeepSeek 或自定义 API，用于生成内容梳理。</p></div>
                 <button type="button" disabled={loading || Boolean(aiSettings.defaultProvider)} onClick={() => {
                   setSetupGuideOpen(false);
                   setAiModalOpen(true);
@@ -1040,7 +1041,9 @@ export default function Workspace({
             <nav className="document-tabs" aria-label="文稿内容">
               <button className={documentTab === "transcript" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("transcript")}>文稿</button>
               <button className={documentTab === "summary" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("summary")}>内容梳理</button>
-              <button className={documentTab === "learning_prompt" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("learning_prompt")}>学习 Prompt</button>
+              {hasLegacyLearningPrompt && (
+                <button className={documentTab === "learning_prompt" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("learning_prompt")}>历史 Prompt</button>
+              )}
             </nav>
           </div>
 
@@ -1084,18 +1087,22 @@ export default function Workspace({
                     {frameworkOptions.map((framework) => <option key={framework.id} value={framework.id}>{framework.name}{framework.isDeleted ? "（已删除）" : ""}</option>)}
                   </select></label>
                 )}
-                <label><span>分析来源</span><select disabled={cleanupProcessing} value={analysisSource} onChange={(event) => setAnalysisSource(event.target.value as "original" | "current")}>
-                  <option value="current">当前编辑稿</option><option value="original">官方原稿</option>
-                </select></label>
+                {documentTab === "summary" && (
+                  <label><span>分析来源</span><select disabled={cleanupProcessing} value={analysisSource} onChange={(event) => setAnalysisSource(event.target.value as "original" | "current")}>
+                    <option value="current">当前编辑稿</option><option value="original">官方原稿</option>
+                  </select></label>
+                )}
               </div>
               <div className="analysis-actions">
                 {selectedAnalysis?.stale && <span className="stale-badge">分析已过期</span>}
                 {selectedAnalysis && <span className="analysis-meta">{selectedAnalysis.sourceType === "current" ? "编辑稿" : "原稿"} · {dateLabel(selectedAnalysis.generatedAt)}</span>}
                 {analysisMarkdown && <button type="button" disabled={cleanupProcessing} onClick={() => void copyText(analysisMarkdown, "分析 Markdown 已复制")}>复制</button>}
                 {selectedAnalysis && <button type="button" disabled={cleanupProcessing} onClick={() => void downloadFile(`/api/episodes/${selected.eid}/analyses/download?slot=${encodeURIComponent(selectedSlot)}`, `${selected.title}-${documentTab === "summary" ? "内容梳理" : "学习Prompt"}.md`)}>下载 .md</button>}
-                <button className="save-button" type="button" disabled={generating || cleanupProcessing || Boolean(selectedFramework?.isDeleted)} onClick={() => void generateAnalysis()}>
-                  {generating ? "AI 正在阅读全文…" : selectedAnalysis ? "重新生成" : "开始生成"}
-                </button>
+                {documentTab === "summary" && (
+                  <button className="save-button" type="button" disabled={generating || cleanupProcessing || Boolean(selectedFramework?.isDeleted)} onClick={() => void generateAnalysis()}>
+                    {generating ? "AI 正在阅读全文…" : selectedAnalysis ? "重新生成" : "开始生成"}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -1121,12 +1128,17 @@ export default function Workspace({
               <div className="analysis-empty"><span>AI</span><h3>正在覆盖全文并生成 Markdown</h3><p>长文稿会先分段提炼，再统一汇总。请保持页面打开。</p></div>
             ) : analysisMarkdown ? (
               <MarkdownPreview markdown={analysisMarkdown} analysisPreview={documentTab === "summary"} />
+            ) : documentTab === "summary" ? (
+              <div className="analysis-empty">
+                <span>纲</span>
+                <h3>用你的框架梳理全文</h3>
+                <p>选择框架与文稿版本后手动生成。AI 会保留时间戳，并区分事实、归纳和不确定内容。</p>
+              </div>
             ) : (
               <div className="analysis-empty">
-                <span>{documentTab === "summary" ? "纲" : "问"}</span>
-                <h3>{documentTab === "summary" ? "用你的框架梳理全文" : "生成一份播客专属学习 Prompt"}</h3>
-                <p>{documentTab === "summary" ? "选择框架与文稿版本后手动生成。AI 会保留时间戳，并区分事实、归纳和不确定内容。"
-                  : "AI 会提炼知识背景、追问流程、案例、实践任务和自测方式，可直接转发给另一个 AI。"}</p>
+                <span>旧</span>
+                <h3>历史 Prompt</h3>
+                <p>此结果仅支持查看、复制和下载，不再支持重新生成。</p>
               </div>
             )}
           </div>

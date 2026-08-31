@@ -23,8 +23,11 @@ import { apiError, HttpError, requireApiUser } from "@/lib/user";
 
 type Context = { params: Promise<{ eid: string }> };
 
-function parseKind(value: unknown): AnalysisKind {
-  if (value === "summary" || value === "learning_prompt") return value;
+function parseKind(value: unknown): Extract<AnalysisKind, "summary"> {
+  if (value === "summary") return value;
+  if (value === "learning_prompt") {
+    throw new HttpError(410, "ANALYSIS_KIND_REMOVED", "学习 Prompt 生成功能已下线，历史结果仍可查看");
+  }
   throw new HttpError(400, "INVALID_ANALYSIS_KIND", "分析类型无效");
 }
 

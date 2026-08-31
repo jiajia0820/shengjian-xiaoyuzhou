@@ -456,25 +456,23 @@ test("automatically creates secure isolated anonymous browser accounts", async (
   assert.match(schema, /sqliteTable\("anonymous_sessions"/);
 });
 
-test("generates staged podcast-host learning prompts", async () => {
-  const analysis = await readFile(new URL("../lib/analysis.ts", import.meta.url), "utf8");
+test("keeps legacy learning prompts read-only", async () => {
+  const [workspace, analysis, layout, readme] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/analysis.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+  ]);
 
-  assert.match(analysis, /播客听后深度对谈 Prompt/);
-  assert.match(analysis, /最高优先级：对话启动协议/);
-  assert.match(analysis, /正式提问前先完整展示本期学习地图/);
-  assert.match(analysis, /想先就本期播客自由提问，还是现在开始正式学习/);
-  assert.match(analysis, /根据节目时长、内容长度、概念数量、观点分歧和知识密度/);
-  assert.match(analysis, /进入下一阶段条件/);
-  assert.match(analysis, /默认 2–4 轮/);
-  assert.match(analysis, /最多进行两次有针对性的补问/);
-  assert.match(analysis, /不要求每轮机械点名/);
-  assert.match(analysis, /多人节目分别列出每位可可靠识别人物/);
-  assert.match(analysis, /回答记录与阶段总结/);
-  assert.match(analysis, /用户在该阶段的真实回答/);
-  assert.match(analysis, /具体可执行的实践方案/);
-  assert.match(analysis, /本期播客的学习对话已结束/);
-  assert.match(analysis, /单集时长/);
-  assert.match(analysis, /不得声称自己是真人/);
+  assert.match(workspace, /result\.kind === "learning_prompt"/);
+  assert.match(workspace, /历史 Prompt/);
+  assert.match(workspace, /documentTab === "learning_prompt"/);
+  assert.doesNotMatch(workspace, /生成一份播客专属学习 Prompt/);
+  assert.doesNotMatch(workspace, /学习 Prompt 已生成/);
+  assert.doesNotMatch(analysis, /最高优先级：对话启动协议/);
+  assert.doesNotMatch(analysis, /播客听后深度对谈 Prompt/);
+  assert.doesNotMatch(layout, /内容梳理与学习 Prompt/);
+  assert.match(readme, /历史.*Prompt.*只读/);
 });
 
 test("保留内容梳理的原文证据和分段上下文", async () => {

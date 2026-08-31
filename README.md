@@ -1,6 +1,6 @@
 # 声笺
 
-一个 owner-only 的小宇宙官方文稿 Markdown 私有库。连接小宇宙账号后，粘贴带官方字幕的单集链接，即可提取、预览、编辑、复制和下载文稿，并按自定义框架生成内容梳理与单集专属学习 Prompt。
+一个 owner-only 的小宇宙官方文稿 Markdown 私有库。连接小宇宙账号后，粘贴带官方字幕的单集链接，即可提取、预览、编辑、复制和下载文稿，并按自定义框架生成内容梳理。
 
 ## 边界
 
@@ -24,14 +24,16 @@
 
 - Sites + vinext
 - D1：账号连接、文稿索引、梳理框架与分析结果索引
-- R2：每期的 `original.md`、`current.md`、内容梳理与学习 Prompt
+- R2：每期的 `original.md`、`current.md` 与内容梳理；历史学习 Prompt 结果继续保存在原有对象键中
 - AES-GCM：服务端加密 access token 与 refresh token
-- AI 设置：DeepSeek 固定使用 `deepseek-v4-flash`、Chat Completions，并关闭 thinking；不启用联网工具
+- AI 设置：DeepSeek 固定使用 `deepseek-v4-flash`、Chat Completions，并关闭 thinking；用于生成内容梳理，不启用联网工具
 - 自定义 OpenAI-compatible 连接：支持 HTTPS Responses 或 Chat Completions；用户手动填写 Base URL、API Key 和模型
 - AI API Key 由用户在私有站点的“AI 提供商设置”中填写，使用 AES-GCM 加密后存入 D1；Base URL 不写入分析结果
 - 分析结果只记录提供商、API 格式和模型，不记录 Base URL、完整 Key 或 Authorization 信息
 - Codex 中转预设仅预填 `gpt-5.6-luna`、Responses 和 `medium`；Base URL 与 API Key 始终需要用户填写
 - Sites 登录用户头：所有 API 的所有权隔离
+
+历史上已经生成的学习 Prompt 仍可只读查看、复制和下载，但不再支持新生成。
 
 ## 本地验证
 
