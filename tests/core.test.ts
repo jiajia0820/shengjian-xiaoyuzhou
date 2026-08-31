@@ -109,8 +109,9 @@ function routeMockModule(specifier: string): string | undefined {
   if (!globalThis.__analysisGenerateRouteTestDeps) return undefined;
   const exports: Record<string, string> = {
     "@/lib/analysis": "buildAnalysisMarkdown,generateAnalysisBody",
+    "@/lib/analysis-assistant": "buildAssistantPrompt,buildOriginalContext,extractSummarySection,generateAssistantAnswer",
     "@/lib/ai-settings": "readActiveAiConfiguration",
-    "@/lib/db": "acquireAnalysisLease,consumeUsage,getEpisodeRecord,getFramework,publicAnalysis,refundUsage,releaseAnalysisLease,setOriginalHash,touchCurrentDocument,upsertAnalysisResult",
+    "@/lib/db": "acquireAnalysisLease,consumeUsage,getAnalysisResult,getEpisodeRecord,getFramework,listAnalysisResults,publicAnalysis,refundUsage,releaseAnalysisLease,setOriginalHash,touchCurrentDocument,upsertAnalysisResult",
     "@/lib/documents": "analysisDocumentKey,documentKeys,putJson,putMarkdown,readJson,readMarkdown",
     "@/lib/frameworks": "frameworkForAnalysis,SYSTEM_FRAMEWORK_ID",
     "@/lib/security": "sha256Hex",
@@ -1621,27 +1622,6 @@ test("uses the injected executor and summary request budget for short transcript
   assert.match(requests[0].input, /<document>[\s\S]*这是原文中的具体论据/);
 });
 
-test("uses the dedicated learning prompt budget for short transcripts", async () => {
-  const requests: ModelRequest[] = [];
-  const result = await runAnalysisWithExecutor({
-    kind: "learning_prompt",
-    markdown: "[00:00:01] 这是学习材料。",
-    executeModel: async (_config, request) => {
-      requests.push(request);
-      return { text: "学习结果" };
-    },
-  });
-
-  assert.equal(result, "学习结果");
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].maxOutputTokens, 5_200);
-  assert.notEqual(requests[0].maxOutputTokens, 4_000);
-  assert.match(requests[0].instructions, /播客听后深度对谈 Prompt/);
-  assert.doesNotMatch(requests[0].instructions, /不要把每个小点只写成一句结论/);
-  assert.doesNotMatch(requests[0].instructions, /不要为了达到字数重复/);
-  assert.doesNotMatch(requests[0].instructions, /为后续按指定框架生成展开版内容梳理/);
-});
-
 test("creates ordered evidence notes for long summary transcripts before final synthesis", async () => {
   const paragraphs = Array.from({ length: 4 }, (_, index) =>
     `[${String(index).padStart(2, "0")}:00:00] ${"内容".repeat(45_000)}`,
@@ -1747,6 +1727,82 @@ test("adds server-owned frontmatter to AI Markdown", () => {
   assert.match(markdown, /model: "gpt-5.6-luna"/);
   assert.doesNotMatch(markdown, /relay\.example|relay-secret/);
   assert.match(markdown, /# 如何建立统计直觉｜内容梳理/);
+});
+
+test("keeps the historical learning prompt Markdown title compatible", () => {
+  const markdown = buildAnalysisMarkdown({
+    episode: {
+      id: 1, user_id: "owner", eid: "episode-id", source_url: "https://www.xiaoyuzhoufm.com/episode/episode-id",
+      title: "如何建立统计直觉", podcast_title: "样本播客", published_at: null, duration_seconds: 3600,
+      segment_count: 20, original_key: "original.md", current_key: "current.md", original_hash: "original",
+      content_hash: "current", created_at: "2026-08-15T00:00:00.000Z", updated_at: "2026-08-15T00:00:00.000Z",
+    },
+    kind: "learning_prompt", sourceType: "current", sourceHash: "abc123",
+    generatedAt: "2026-08-15T01:00:00.000Z", body: "## 学习地图\n\n历史结果。",
+    frameworkId: null, frameworkName: null,
+    provider: "custom", apiFormat: "responses", model: "gpt-5.6-luna",
+  });
+  assert.match(markdown, /result_type: "learning_prompt"/);
+  assert.match(markdown, /# 如何建立统计直觉｜深度学习与实践 Prompt/);
+  assert.match(markdown, /## 学习地图/);
+});
+
+test("reads and downloads historical learning prompt results", async () => {
+  const historical = {
+    id: 1, user_id: "owner", eid: "episode-id", slot: "learning_prompt", kind: "learning_prompt",
+    framework_id: null, framework_name: null, framework_snapshot: null,
+    source_type: "current", source_hash: "source-hash", model: "legacy-model",
+    provider: "custom", api_format: "responses", result_key: "analysis.md",
+    generated_at: "2026-08-15T01:00:00.000Z",
+  };
+  const episode = {
+    id: 1, user_id: "owner", eid: "episode-id", source_url: "https://www.xiaoyuzhoufm.com/episode/episode-id",
+    title: "历史 Prompt 测试", podcast_title: "样本播客", published_at: null, duration_seconds: 3600,
+    segment_count: 20, original_key: "original.md", current_key: "current.md", original_hash: "source-hash",
+    content_hash: "current", created_at: "2026-08-15T00:00:00.000Z", updated_at: "2026-08-15T00:00:00.000Z",
+  };
+  const readKeys: string[] = [];
+  globalThis.__analysisGenerateRouteTestDeps = {
+    "@/lib/db": {
+      getAnalysisResult: async () => historical,
+      getEpisodeRecord: async () => episode,
+      listAnalysisResults: async () => [historical],
+      publicAnalysis: (record: Record<string, unknown>) => ({ slot: record.slot, kind: record.kind }),
+      setOriginalHash: async () => undefined,
+    },
+    "@/lib/documents": {
+      readMarkdown: async (key: string) => { readKeys.push(key); return "历史 Prompt Markdown"; },
+    },
+    "@/lib/security": { sha256Hex: async () => "source-hash" },
+    "@/lib/user": {
+      apiError: (error: unknown) => error instanceof HttpError
+        ? Response.json({ error: error.code, message: error.message }, { status: error.status })
+        : Response.json({ error: "INTERNAL_ERROR" }, { status: 500 }),
+      HttpError,
+      requireApiUser: async () => ({ userId: "owner" }),
+    },
+  };
+  try {
+    const readRoute = await import(`${new URL("../app/api/episodes/[eid]/analyses/route.ts", import.meta.url).href}?legacy-read=${crypto.randomUUID()}`);
+    const readResponse = await readRoute.GET(new Request("https://app.example/api/episodes/episode-id/analyses?slot=learning_prompt"), {
+      params: Promise.resolve({ eid: "episode-id" }),
+    });
+    const readPayload = await readResponse.json() as { result?: { kind?: string }; markdown?: string };
+    assert.equal(readResponse.status, 200);
+    assert.deepEqual(readPayload.result, { slot: "learning_prompt", kind: "learning_prompt" });
+    assert.equal(readPayload.markdown, "历史 Prompt Markdown");
+
+    const downloadRoute = await import(`${new URL("../app/api/episodes/[eid]/analyses/download/route.ts", import.meta.url).href}?legacy-download=${crypto.randomUUID()}`);
+    const downloadResponse = await downloadRoute.GET(new Request("https://app.example/api/episodes/episode-id/analyses/download?slot=learning_prompt"), {
+      params: Promise.resolve({ eid: "episode-id" }),
+    });
+    assert.equal(downloadResponse.status, 200);
+    assert.equal(await downloadResponse.text(), "历史 Prompt Markdown");
+    assert.match(decodeURIComponent(downloadResponse.headers.get("content-disposition") ?? ""), /学习-Prompt\.md/);
+    assert.deepEqual(readKeys, ["analysis.md", "analysis.md"]);
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+  }
 });
 
 test("normalizes only usable Xiaoyuzhou captcha tickets", () => {
@@ -2027,6 +2083,183 @@ test("说话人预览只计算结果，不写入文稿或旁车文件", async ()
     assert.match(payload.preview.markdown, /speaker_source: "pyannote-wespeaker-voiceprint-v1"/);
     assert.equal(payload.preview.reviewCount, 0);
     assert.equal(writeCount, 0);
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+  }
+});
+
+test("rejects removed learning prompt generation before charging or calling AI", async () => {
+  let documentReads = 0;
+  let usageCalls = 0;
+  let leaseCalls = 0;
+  let configCalls = 0;
+  globalThis.__analysisGenerateRouteTestDeps = {
+    "@/lib/analysis": { buildAnalysisMarkdown, generateAnalysisBody: async () => "unexpected" },
+    "@/lib/ai-settings": { readActiveAiConfiguration: async () => { configCalls += 1; throw new Error("unexpected"); } },
+    "@/lib/db": {
+      acquireAnalysisLease: async () => { leaseCalls += 1; return "lease"; },
+      consumeUsage: async () => { usageCalls += 1; return true; },
+      getEpisodeRecord: async () => analysisEpisode,
+      getFramework: async () => null,
+      publicAnalysis: (record: Record<string, unknown>) => record,
+      refundUsage: async () => undefined,
+      releaseAnalysisLease: async () => undefined,
+      setOriginalHash: async () => undefined,
+      upsertAnalysisResult: async () => { throw new Error("unexpected"); },
+    },
+    "@/lib/documents": {
+      analysisDocumentKey: async () => "unexpected",
+      putMarkdown: async () => { throw new Error("unexpected"); },
+      readMarkdown: async () => { documentReads += 1; throw new Error("unexpected"); },
+    },
+    "@/lib/frameworks": { frameworkForAnalysis: () => SYSTEM_FRAMEWORK, SYSTEM_FRAMEWORK_ID: SYSTEM_FRAMEWORK.id },
+    "@/lib/security": { sha256Hex: async () => "unexpected" },
+    "@/lib/user": {
+      apiError: (error: unknown) => error instanceof HttpError
+        ? Response.json({ error: error.code, message: error.message }, { status: error.status })
+        : Response.json({ error: "INTERNAL_ERROR" }, { status: 500 }),
+      HttpError,
+      requireApiUser: async () => ({ userId: "owner" }),
+    },
+  };
+  try {
+    const route = await import(`${new URL("../app/api/episodes/[eid]/analyses/generate/route.ts", import.meta.url).href}?removed=${crypto.randomUUID()}`);
+    const response = await route.POST(new Request("https://app.example/api/episodes/episode-id/analyses/generate", {
+      method: "POST",
+      body: JSON.stringify({ kind: "learning_prompt", source: "current" }),
+    }), { params: Promise.resolve({ eid: "episode-id" }) });
+    const payload = await response.json() as { error?: string; message?: string };
+
+    assert.equal(response.status, 410);
+    assert.equal(payload.error, "ANALYSIS_KIND_REMOVED");
+    assert.match(payload.message ?? "", /学习 Prompt 生成功能已下线/);
+    assert.equal(documentReads, 0);
+    assert.equal(usageCalls, 0);
+    assert.equal(leaseCalls, 0);
+    assert.equal(configCalls, 0);
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+  }
+});
+
+test("analysis assistant answers with the selected summary and official context", async () => {
+  const summary = {
+    id: 1, user_id: "owner", eid: analysisEpisode.eid, slot: "summary:system-brief-v1", kind: "summary",
+    framework_id: SYSTEM_FRAMEWORK.id, framework_name: SYSTEM_FRAMEWORK.name, framework_snapshot: SYSTEM_FRAMEWORK.instructions,
+    source_type: "current", source_hash: "current", model: "summary-model", provider: "custom", api_format: "responses",
+    result_key: "summary.md", generated_at: "2026-08-31T01:00:00.000Z",
+  };
+  const requests: ModelRequest[] = [];
+  const readKeys: string[] = [];
+  let usageCalls = 0;
+  let refundCalls = 0;
+  globalThis.__analysisGenerateRouteTestDeps = {
+    "@/lib/analysis-assistant": {
+      extractSummarySection: (_markdown: string, selectedText: string) => ({ heading: "## 观点", text: `## 观点\n\n${selectedText}` }),
+      buildOriginalContext: (_markdown: string, evidence: string) => ({
+        heading: null, text: `[00:11:00] 原文依据：${evidence}`, source: "official_timestamp", timestamps: ["00:11:00"],
+        notice: "已按时间戳截取官方原文（前后约 90 秒）。",
+      }),
+      buildAssistantPrompt: (args: { selectedText: string; summarySection: string; originalContext: { source: string } }) => {
+        assert.equal(args.selectedText, "选中观点");
+        assert.match(args.summarySection, /## 观点/);
+        assert.equal(args.originalContext.source, "official_timestamp");
+        return { instructions: "安全指令", input: "助手输入", maxOutputTokens: 1_800 };
+      },
+      generateAssistantAnswer: async (_config: AiRuntimeConfig, request: ModelRequest) => {
+        requests.push(request);
+        return "回答 [原文 00:11:00]";
+      },
+    },
+    "@/lib/ai-settings": { readActiveAiConfiguration: async () => analysisRuntimeConfig },
+    "@/lib/db": {
+      consumeUsage: async () => { usageCalls += 1; return true; },
+      refundUsage: async () => { refundCalls += 1; },
+      getAnalysisResult: async () => summary,
+      getEpisodeRecord: async () => analysisEpisode,
+    },
+    "@/lib/documents": {
+      readMarkdown: async (key: string) => {
+        readKeys.push(key);
+        return key === "summary.md" ? "# 梳理\n\n## 观点\n\n选中观点" : "[00:11:00] 官方原文依据";
+      },
+    },
+    "@/lib/user": {
+      apiError: (error: unknown) => error instanceof HttpError
+        ? Response.json({ error: error.code, message: error.message }, { status: error.status })
+        : Response.json({ error: "INTERNAL_ERROR" }, { status: 500 }),
+      HttpError,
+      requireApiUser: async () => ({ userId: "owner" }),
+    },
+  };
+  try {
+    const route = await import(`${new URL("../app/api/episodes/[eid]/assistant/route.ts", import.meta.url).href}?success=${crypto.randomUUID()}`);
+    const response = await route.POST(new Request("https://app.example/api/episodes/analysis-episode/assistant", {
+      method: "POST",
+      body: JSON.stringify({
+        slot: "summary:system-brief-v1", selectedText: "选中观点", role: "主题顾问", question: "依据是什么？",
+        history: [{ role: "user", content: "上一问" }],
+      }),
+    }), { params: Promise.resolve({ eid: "analysis-episode" }) });
+    const payload = await response.json() as { answer?: string; context?: { source?: string; timestamps?: string[] } };
+    assert.equal(response.status, 200);
+    assert.equal(payload.answer, "回答 [原文 00:11:00]");
+    assert.deepEqual(payload.context, { source: "official_timestamp", timestamps: ["00:11:00"], summarySection: "## 观点" });
+    assert.equal(usageCalls, 1);
+    assert.equal(refundCalls, 0);
+    assert.equal(requests.length, 1);
+    assert.deepEqual(readKeys, ["summary.md", "original.md"]);
+  } finally {
+    globalThis.__analysisGenerateRouteTestDeps = undefined;
+  }
+});
+
+test("analysis assistant rejects invalid slots and refunds model failures", async () => {
+  let usageCalls = 0;
+  let refundCalls = 0;
+  let modelCalls = 0;
+  globalThis.__analysisGenerateRouteTestDeps = {
+    "@/lib/analysis-assistant": {
+      extractSummarySection: () => ({ heading: null, text: "选文" }),
+      buildOriginalContext: () => ({ heading: null, text: "", source: "summary_only", timestamps: [], notice: "无原文" }),
+      buildAssistantPrompt: () => ({ instructions: "安全", input: "输入", maxOutputTokens: 1_800 }),
+      generateAssistantAnswer: async () => { modelCalls += 1; throw new Error("provider-secret-key"); },
+    },
+    "@/lib/ai-settings": { readActiveAiConfiguration: async () => analysisRuntimeConfig },
+    "@/lib/db": {
+      consumeUsage: async () => { usageCalls += 1; return true; },
+      refundUsage: async () => { refundCalls += 1; },
+      getAnalysisResult: async () => ({ kind: "summary", slot: "summary:system-brief-v1", result_key: "summary.md" }),
+      getEpisodeRecord: async () => analysisEpisode,
+    },
+    "@/lib/documents": { readMarkdown: async () => "原文" },
+    "@/lib/user": {
+      apiError: (error: unknown) => error instanceof HttpError
+        ? Response.json({ error: error.code, message: error.message }, { status: error.status })
+        : Response.json({ error: "INTERNAL_ERROR" }, { status: 500 }),
+      HttpError,
+      requireApiUser: async () => ({ userId: "owner" }),
+    },
+  };
+  try {
+    const route = await import(`${new URL("../app/api/episodes/[eid]/assistant/route.ts", import.meta.url).href}?errors=${crypto.randomUUID()}`);
+    const invalid = await route.POST(new Request("https://app.example/api/episodes/analysis-episode/assistant", {
+      method: "POST", body: JSON.stringify({ slot: "learning_prompt", selectedText: "选文", role: "顾问", question: "问题" }),
+    }), { params: Promise.resolve({ eid: "analysis-episode" }) });
+    assert.equal(invalid.status, 400);
+    assert.equal(usageCalls, 0);
+    assert.equal(modelCalls, 0);
+
+    const failed = await route.POST(new Request("https://app.example/api/episodes/analysis-episode/assistant", {
+      method: "POST", body: JSON.stringify({ slot: "summary:system-brief-v1", selectedText: "选文", role: "顾问", question: "问题" }),
+    }), { params: Promise.resolve({ eid: "analysis-episode" }) });
+    const payload = await failed.json() as { message?: string };
+    assert.equal(failed.status, 502);
+    assert.match(payload.message ?? "", /暂时无法回答/);
+    assert.doesNotMatch(payload.message ?? "", /provider-secret-key/);
+    assert.equal(usageCalls, 1);
+    assert.equal(refundCalls, 1);
+    assert.equal(modelCalls, 1);
   } finally {
     globalThis.__analysisGenerateRouteTestDeps = undefined;
   }

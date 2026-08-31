@@ -1,12 +1,14 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { apiFetch, downloadWithAuth, type Viewer } from "@/lib/auth-client";
 import XiaoyuzhouCaptcha, {
   type XiaoyuzhouCaptchaHandle,
   type XiaoyuzhouCaptchaToken,
 } from "@/app/xiaoyuzhou-captcha";
+import { AnalysisAssistant } from "@/app/analysis-assistant";
 import { SpeakerDiarizationPanel } from "@/app/speaker-diarization-panel";
+import { inferAssistantRole } from "@/lib/analysis-assistant";
 import { stripRedundantAnalysisHeading } from "@/lib/analysis-format";
 import {
   cleanupProgressLabel,
@@ -48,6 +50,7 @@ type AnalysisResult = {
 };
 type Notice = { kind: "success" | "error" | "info"; text: string } | null;
 type DocumentTab = "transcript" | "summary" | "learning_prompt";
+type AnalysisSelection = { text: string; top: number; left: number };
 
 const FALLBACK_SYSTEM_FRAMEWORK: Framework = {
   id: "system-brief-v1", name: "通用内容梳理", isSystem: true, createdAt: null, updatedAt: null,
@@ -88,7 +91,14 @@ function MarkdownPreview({
   markdown,
   hideEpisodeMeta = false,
   analysisPreview = false,
-}: { markdown: string; hideEpisodeMeta?: boolean; analysisPreview?: boolean }) {
+  onTextSelection,
+}: {
+  markdown: string;
+  hideEpisodeMeta?: boolean;
+  analysisPreview?: boolean;
+  onTextSelection?: (selection: AnalysisSelection | null) => void;
+}) {
+  const previewRef = useRef<HTMLDivElement>(null);
   const body = useMemo(() => markdown.replace(/^---[\s\S]*?---\s*/, ""), [markdown]);
   const lines = useMemo(() => {
     let nextLines = body.split(/\r?\n/);
@@ -96,8 +106,63 @@ function MarkdownPreview({
     if (analysisPreview) nextLines = stripRedundantAnalysisHeading(nextLines);
     return nextLines;
   }, [body, hideEpisodeMeta, analysisPreview]);
+
+  useEffect(() => {
+    if (!analysisPreview || !onTextSelection) return;
+    const previewElement = previewRef.current;
+    const selectionHandler = onTextSelection;
+    if (!previewElement) return;
+
+    function reportTextSelection() {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) {
+        selectionHandler(null);
+        return;
+      }
+      const text = selection.toString().trim();
+      const range = selection.getRangeAt(0);
+      if (!text || !previewElement!.contains(range.commonAncestorContainer)) {
+        selectionHandler(null);
+        return;
+      }
+      const rect = range.getBoundingClientRect();
+      if (!rect.width && !rect.height) {
+        selectionHandler(null);
+        return;
+      }
+      selectionHandler({
+        text,
+        top: Math.min(window.innerHeight - 56, Math.max(8, rect.bottom + 8)),
+        left: Math.min(window.innerWidth - 84, Math.max(8, rect.left)),
+      });
+    }
+
+    const reportAfterMouseSelection = () => window.setTimeout(reportTextSelection, 0);
+    const reportAfterTouchSelection = () => window.setTimeout(reportTextSelection, 0);
+    const clearSelectionOnPointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".analysis-assistant, .analysis-assistant-launcher, .analysis-selection-action")) return;
+      selectionHandler(null);
+    };
+    previewElement.addEventListener("mouseup", reportAfterMouseSelection);
+    previewElement.addEventListener("keyup", reportTextSelection);
+    previewElement.addEventListener("touchend", reportAfterTouchSelection);
+    document.addEventListener("mousedown", clearSelectionOnPointerDown);
+    document.addEventListener("touchstart", clearSelectionOnPointerDown);
+    return () => {
+      previewElement.removeEventListener("mouseup", reportAfterMouseSelection);
+      previewElement.removeEventListener("keyup", reportTextSelection);
+      previewElement.removeEventListener("touchend", reportAfterTouchSelection);
+      document.removeEventListener("mousedown", clearSelectionOnPointerDown);
+      document.removeEventListener("touchstart", clearSelectionOnPointerDown);
+    };
+  }, [analysisPreview, onTextSelection]);
+
   return (
-    <div className={analysisPreview ? "markdown-preview analysis-preview" : "markdown-preview"}>
+    <div
+      ref={previewRef}
+      className={analysisPreview ? "markdown-preview analysis-preview" : "markdown-preview"}
+    >
       {lines.map((line, index) => {
         if (line.startsWith("# ")) return <h1 key={index}>{line.slice(2)}</h1>;
         if (line.startsWith("## ")) return <h2 key={index}>{line.slice(3)}</h2>;
@@ -161,6 +226,10 @@ export default function Workspace({
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
   const [analysisMarkdown, setAnalysisMarkdown] = useState("");
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisSelection, setAnalysisSelection] = useState<AnalysisSelection | null>(null);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantCollapsed, setAssistantCollapsed] = useState(false);
+  const [assistantWidth, setAssistantWidth] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
   const [analysisSource, setAnalysisSource] = useState<"original" | "current">("current");
   const [selectedFrameworkId, setSelectedFrameworkId] = useState(FALLBACK_SYSTEM_FRAMEWORK.id);
@@ -244,6 +313,10 @@ export default function Workspace({
   const selectedSlot = documentTab === "summary" ? `summary:${selectedFrameworkId}`
     : documentTab === "learning_prompt" ? "learning_prompt" : "";
   const selectedAnalysis = analysisResults.find((result) => result.slot === selectedSlot) ?? null;
+  const assistantLauncherVisible = Boolean(documentTab === "summary" && (analysisMarkdown || selectedAnalysis));
+  const assistantVisible = Boolean(assistantLauncherVisible && assistantOpen && !assistantCollapsed);
+  const assistantWidthStyle = assistantWidth ? { "--analysis-assistant-width": `${assistantWidth}px` } as CSSProperties : undefined;
+  const hasLegacyLearningPrompt = analysisResults.some((result) => result.kind === "learning_prompt");
   const selectedFramework = frameworkOptions.find((item) => item.id === selectedFrameworkId) ?? null;
 
   async function sendCode() {
@@ -308,6 +381,9 @@ export default function Workspace({
     setSelected(episode);
     setDocumentTab("transcript");
     setEditorMode("preview");
+    setAnalysisSelection(null);
+    setAssistantOpen(false);
+    setAssistantCollapsed(false);
     setDocumentLoading(true);
     setAnalysisMarkdown("");
     setCleanupStats(null);
@@ -363,6 +439,9 @@ export default function Workspace({
       setSpeakerLayoutStale(false);
       setDocumentTab("transcript");
       setEditorMode("preview");
+      setAnalysisSelection(null);
+      setAssistantOpen(false);
+      setAssistantCollapsed(false);
       const analysisData = await responseJson<{ results: AnalysisResult[] }>(
         await apiFetch(`/api/episodes/${data.episode.eid}/analyses`, { cache: "no-store" }),
       );
@@ -473,7 +552,7 @@ export default function Workspace({
     const episode = selected;
     if (!episode || cleanupProcessing) return;
     const confirmed = window.confirm(
-      `永久删除“${episode.title}”？官方原稿、编辑稿、内容梳理和学习 Prompt 都会删除，且无法恢复。`,
+      `永久删除“${episode.title}”？官方原稿、编辑稿和历史分析结果都会删除，且无法恢复。`,
     );
     if (!confirmed) return;
     setDeletingEid(episode.eid);
@@ -538,6 +617,9 @@ export default function Workspace({
 
   function switchDocumentTab(tab: DocumentTab) {
     if (cleanupProcessing) return;
+    setAnalysisSelection(null);
+    setAssistantOpen(false);
+    setAssistantCollapsed(false);
     setDocumentTab(tab);
     setEditorMode("preview");
     if (tab === "summary") void loadAnalysis(`summary:${selectedFrameworkId}`);
@@ -546,11 +628,14 @@ export default function Workspace({
 
   function changeFramework(id: string) {
     setSelectedFrameworkId(id);
+    setAnalysisSelection(null);
+    setAssistantOpen(false);
+    setAssistantCollapsed(false);
     if (documentTab === "summary") void loadAnalysis(`summary:${id}`);
   }
 
   async function generateAnalysis() {
-    if (!selected || documentTab === "transcript" || cleanupProcessing) return;
+    if (!selected || documentTab !== "summary" || cleanupProcessing) return;
     if (!aiSettings.defaultProvider) {
       setAiModalOpen(true);
       setNotice({ kind: "info", text: "请先设置 AI 提供商" });
@@ -567,15 +652,15 @@ export default function Workspace({
         await apiFetch(`/api/episodes/${selected.eid}/analyses/generate`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            kind: documentTab === "summary" ? "summary" : "learning_prompt",
+            kind: "summary",
             source: analysisSource,
-            frameworkId: documentTab === "summary" ? selectedFrameworkId : undefined,
+            frameworkId: selectedFrameworkId,
           }),
         }),
       );
       setAnalysisMarkdown(data.markdown);
       setAnalysisResults((results) => [data.result, ...results.filter((item) => item.slot !== data.result.slot)]);
-      setNotice({ kind: "success", text: documentTab === "summary" ? "内容梳理已生成" : "学习 Prompt 已生成" });
+      setNotice({ kind: "success", text: "内容梳理已生成" });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "AI 生成失败，旧结果已保留" });
     } finally {
@@ -635,7 +720,7 @@ export default function Workspace({
       applyAiSettings(status);
       closeAiModal();
       if (!account?.connected) setSetupGuideOpen(true);
-      setNotice({ kind: "success", text: "DeepSeek 已连接，可以开始生成内容梳理和学习 Prompt" });
+      setNotice({ kind: "success", text: "DeepSeek 已连接，可以开始生成内容梳理" });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "DeepSeek 设置保存失败" });
     } finally {
@@ -659,7 +744,7 @@ export default function Workspace({
       syncCustomDraft(status.providers.custom);
       closeAiModal();
       if (!account?.connected) setSetupGuideOpen(true);
-      setNotice({ kind: "success", text: "自定义 API 已连接，可以开始生成内容梳理和学习 Prompt" });
+      setNotice({ kind: "success", text: "自定义 API 已连接，可以开始生成内容梳理" });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "自定义 API 设置保存失败" });
     } finally {
@@ -856,7 +941,7 @@ export default function Workspace({
             <button className="modal-close" type="button" onClick={() => setSetupGuideOpen(false)} aria-label="关闭">×</button>
             <span className="modal-kicker">START HERE</span>
             <h2 id="setup-guide-title">进入声笺前，确认两项连接</h2>
-            <p>连接后即可提取官方文稿，并使用 AI 生成内容梳理与学习 Prompt。</p>
+            <p>连接后即可提取官方文稿，并使用 AI 生成内容梳理。</p>
             <div className="setup-steps">
               <article className={account?.connected ? "complete" : ""}>
                 <span className="setup-step-no">01</span>
@@ -868,7 +953,7 @@ export default function Workspace({
               </article>
               <article className={aiSettings.defaultProvider ? "complete" : ""}>
                 <span className="setup-step-no">02</span>
-                <div><h3>设置 AI 提供商</h3><p>连接 DeepSeek 或自定义 API，用于生成内容梳理和学习 Prompt。</p></div>
+                <div><h3>设置 AI 提供商</h3><p>连接 DeepSeek 或自定义 API，用于生成内容梳理。</p></div>
                 <button type="button" disabled={loading || Boolean(aiSettings.defaultProvider)} onClick={() => {
                   setSetupGuideOpen(false);
                   setAiModalOpen(true);
@@ -1031,7 +1116,7 @@ export default function Workspace({
       )}
 
       {selected && (
-        <div className="document-drawer" role="dialog" aria-modal="true" aria-labelledby="document-title">
+        <div className={`document-drawer${assistantVisible ? " assistant-open" : ""}`} style={assistantWidthStyle} role="dialog" aria-modal="true" aria-labelledby="document-title">
           <div className="document-sticky-header">
             <div className="drawer-header">
               <div><span>{selected.podcastTitle}</span><h2 id="document-title">{selected.title}</h2></div>
@@ -1040,7 +1125,9 @@ export default function Workspace({
             <nav className="document-tabs" aria-label="文稿内容">
               <button className={documentTab === "transcript" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("transcript")}>文稿</button>
               <button className={documentTab === "summary" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("summary")}>内容梳理</button>
-              <button className={documentTab === "learning_prompt" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("learning_prompt")}>学习 Prompt</button>
+              {hasLegacyLearningPrompt && (
+                <button className={documentTab === "learning_prompt" ? "active" : ""} type="button" disabled={speakerProcessing || cleanupProcessing} onClick={() => switchDocumentTab("learning_prompt")}>历史 Prompt</button>
+              )}
             </nav>
           </div>
 
@@ -1084,18 +1171,22 @@ export default function Workspace({
                     {frameworkOptions.map((framework) => <option key={framework.id} value={framework.id}>{framework.name}{framework.isDeleted ? "（已删除）" : ""}</option>)}
                   </select></label>
                 )}
-                <label><span>分析来源</span><select disabled={cleanupProcessing} value={analysisSource} onChange={(event) => setAnalysisSource(event.target.value as "original" | "current")}>
-                  <option value="current">当前编辑稿</option><option value="original">官方原稿</option>
-                </select></label>
+                {documentTab === "summary" && (
+                  <label><span>分析来源</span><select disabled={cleanupProcessing} value={analysisSource} onChange={(event) => setAnalysisSource(event.target.value as "original" | "current")}>
+                    <option value="current">当前编辑稿</option><option value="original">官方原稿</option>
+                  </select></label>
+                )}
               </div>
               <div className="analysis-actions">
                 {selectedAnalysis?.stale && <span className="stale-badge">分析已过期</span>}
                 {selectedAnalysis && <span className="analysis-meta">{selectedAnalysis.sourceType === "current" ? "编辑稿" : "原稿"} · {dateLabel(selectedAnalysis.generatedAt)}</span>}
                 {analysisMarkdown && <button type="button" disabled={cleanupProcessing} onClick={() => void copyText(analysisMarkdown, "分析 Markdown 已复制")}>复制</button>}
                 {selectedAnalysis && <button type="button" disabled={cleanupProcessing} onClick={() => void downloadFile(`/api/episodes/${selected.eid}/analyses/download?slot=${encodeURIComponent(selectedSlot)}`, `${selected.title}-${documentTab === "summary" ? "内容梳理" : "学习Prompt"}.md`)}>下载 .md</button>}
-                <button className="save-button" type="button" disabled={generating || cleanupProcessing || Boolean(selectedFramework?.isDeleted)} onClick={() => void generateAnalysis()}>
-                  {generating ? "AI 正在阅读全文…" : selectedAnalysis ? "重新生成" : "开始生成"}
-                </button>
+                {documentTab === "summary" && (
+                  <button className="save-button" type="button" disabled={generating || cleanupProcessing || Boolean(selectedFramework?.isDeleted)} onClick={() => void generateAnalysis()}>
+                    {generating ? "AI 正在阅读全文…" : selectedAnalysis ? "重新生成" : "开始生成"}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -1120,16 +1211,59 @@ export default function Workspace({
             ) : generating ? (
               <div className="analysis-empty"><span>AI</span><h3>正在覆盖全文并生成 Markdown</h3><p>长文稿会先分段提炼，再统一汇总。请保持页面打开。</p></div>
             ) : analysisMarkdown ? (
-              <MarkdownPreview markdown={analysisMarkdown} analysisPreview={documentTab === "summary"} />
+              <MarkdownPreview
+                markdown={analysisMarkdown}
+                analysisPreview={documentTab === "summary"}
+                onTextSelection={documentTab === "summary" ? setAnalysisSelection : undefined}
+              />
+            ) : documentTab === "summary" ? (
+              <div className="analysis-empty">
+                <span>纲</span>
+                <h3>用你的框架梳理全文</h3>
+                <p>选择框架与文稿版本后手动生成。AI 会保留时间戳，并区分事实、归纳和不确定内容。</p>
+              </div>
             ) : (
               <div className="analysis-empty">
-                <span>{documentTab === "summary" ? "纲" : "问"}</span>
-                <h3>{documentTab === "summary" ? "用你的框架梳理全文" : "生成一份播客专属学习 Prompt"}</h3>
-                <p>{documentTab === "summary" ? "选择框架与文稿版本后手动生成。AI 会保留时间戳，并区分事实、归纳和不确定内容。"
-                  : "AI 会提炼知识背景、追问流程、案例、实践任务和自测方式，可直接转发给另一个 AI。"}</p>
+                <span>旧</span>
+                <h3>历史 Prompt</h3>
+                <p>此结果仅支持查看、复制和下载，不再支持重新生成。</p>
               </div>
             )}
           </div>
+          {assistantLauncherVisible && !assistantOpen && (
+            <button
+              className="analysis-assistant-launcher"
+              type="button"
+              onClick={() => setAssistantOpen(true)}
+              aria-label="打开 AI 助手"
+              title="打开 AI 助手"
+            >AI</button>
+          )}
+          {documentTab === "summary" && analysisSelection && !assistantOpen && (
+            <button
+              className="analysis-selection-action"
+              type="button"
+              style={{ top: analysisSelection.top, left: analysisSelection.left }}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setAssistantOpen(true)}
+            >问 AI</button>
+          )}
+          {assistantLauncherVisible && assistantOpen && (
+            <AnalysisAssistant
+              key={`${selected.eid}:${selectedSlot}`}
+              eid={selected.eid}
+              episodeTitle={selected.title}
+              podcastTitle={selected.podcastTitle}
+              slot={selectedSlot}
+              selectedText={analysisSelection?.text ?? ""}
+              defaultRole={inferAssistantRole(`${selected.podcastTitle} ${selected.title}`, analysisSelection?.text ?? "")}
+              onCollapsedChange={setAssistantCollapsed}
+              assistantWidth={assistantWidth}
+              onWidthChange={setAssistantWidth}
+              onWidthReset={() => setAssistantWidth(null)}
+              onClose={() => { setAssistantOpen(false); setAssistantCollapsed(false); setAnalysisSelection(null); }}
+            />
+          )}
         </div>
       )}
     </main>

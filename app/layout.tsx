@@ -12,7 +12,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const metadataBase = new URL(`${protocol}://${host}`);
   const title = "声笺｜小宇宙文稿库";
-  const description = "提取小宇宙已有官方文稿，保存为 Markdown，并用个性化框架生成内容梳理与学习 Prompt。";
+  const description = "提取小宇宙已有官方文稿，保存为 Markdown，并用个性化框架生成内容梳理。";
   return {
     metadataBase,
     title,

@@ -1,6 +1,6 @@
 # 声笺
 
-一个 owner-only 的小宇宙官方文稿 Markdown 私有库。连接小宇宙账号后，粘贴带官方字幕的单集链接，即可提取、预览、编辑、复制和下载文稿，并按自定义框架生成内容梳理与单集专属学习 Prompt。
+一个 owner-only 的小宇宙官方文稿 Markdown 私有库。连接小宇宙账号后，粘贴带官方字幕的单集链接，即可提取、预览、编辑、复制和下载文稿，并按自定义框架生成内容梳理。
 
 ## 边界
 
@@ -20,18 +20,26 @@
 
 整理前的当前编辑稿会保存为最近一次快照，可用“撤销 AI 整理”恢复。若官方文稿有更新，可用“重新获取原稿”更新官方版本，当前编辑稿不会被直接覆盖。使用前需要先连接一个可用的 AI 提供商。文稿内容会发送给你选择的提供商进行处理，API Key 只在服务端加密保存，不会展示给浏览器或写入分析结果。
 
+### 内容梳理 AI 助手
+
+生成“内容梳理”后，在梳理正文中选中一段文字，点击选区旁的“问 AI”即可打开侧栏。助手会根据单集标题和播客标题自动给出一个可修改的回答身份；你可以直接输入问题，追问这段内容的原文依据、概念解释或前后逻辑。输入框中按 Enter 直接发送，Shift+Enter 换行。每次回答都会优先使用当前梳理小节，并尝试从官方原稿中提供局部证据：有时间戳时引用前后约 90 秒，没有时间戳时按关键词匹配并明确标注“可能相关”。找不到官方片段时只依据当前梳理，并提示不确定，不会把推测写成原文事实。
+
+助手不修改文稿、不生成新的分析结果；同一单集的最近对话仅保存在当前浏览器的 `localStorage` 中，切换单集后不会混用。每次提问计入每日 AI 额度，网络或模型失败会自动退回本次额度。
+
 ## 技术结构
 
 - Sites + vinext
 - D1：账号连接、文稿索引、梳理框架与分析结果索引
-- R2：每期的 `original.md`、`current.md`、内容梳理与学习 Prompt
+- R2：每期的 `original.md`、`current.md` 与内容梳理；历史学习 Prompt 结果继续保存在原有对象键中
 - AES-GCM：服务端加密 access token 与 refresh token
-- AI 设置：DeepSeek 固定使用 `deepseek-v4-flash`、Chat Completions，并关闭 thinking；不启用联网工具
+- AI 设置：DeepSeek 固定使用 `deepseek-v4-flash`、Chat Completions，并关闭 thinking；用于生成内容梳理，不启用联网工具
 - 自定义 OpenAI-compatible 连接：支持 HTTPS Responses 或 Chat Completions；用户手动填写 Base URL、API Key 和模型
 - AI API Key 由用户在私有站点的“AI 提供商设置”中填写，使用 AES-GCM 加密后存入 D1；Base URL 不写入分析结果
 - 分析结果只记录提供商、API 格式和模型，不记录 Base URL、完整 Key 或 Authorization 信息
 - Codex 中转预设仅预填 `gpt-5.6-luna`、Responses 和 `medium`；Base URL 与 API Key 始终需要用户填写
 - Sites 登录用户头：所有 API 的所有权隔离
+
+历史上已经生成的学习 Prompt 仍可只读查看、复制和下载，但不再支持新生成。
 
 ## 本地验证
 

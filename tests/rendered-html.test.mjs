@@ -185,7 +185,10 @@ test("hides the episode metadata block only from transcript reading preview", as
   const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
   assert.match(workspace, /function stripEpisodeMetaFromPreview/);
   assert.match(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta \/>/);
-  assert.match(workspace, /<MarkdownPreview markdown=\{analysisMarkdown\} analysisPreview=\{documentTab === "summary"\} \/>/);
+  assert.match(
+    workspace,
+    /<MarkdownPreview[\s\S]*markdown=\{analysisMarkdown\}[\s\S]*analysisPreview=\{documentTab === "summary"\}[\s\S]*\/>/,
+  );
   assert.match(workspace, /节目：/);
   assert.match(workspace, /原始单集：/);
 });
@@ -456,25 +459,103 @@ test("automatically creates secure isolated anonymous browser accounts", async (
   assert.match(schema, /sqliteTable\("anonymous_sessions"/);
 });
 
-test("generates staged podcast-host learning prompts", async () => {
-  const analysis = await readFile(new URL("../lib/analysis.ts", import.meta.url), "utf8");
+test("keeps legacy learning prompts read-only", async () => {
+  const [workspace, analysis, layout, readme] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/analysis.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+  ]);
 
-  assert.match(analysis, /播客听后深度对谈 Prompt/);
-  assert.match(analysis, /最高优先级：对话启动协议/);
-  assert.match(analysis, /正式提问前先完整展示本期学习地图/);
-  assert.match(analysis, /想先就本期播客自由提问，还是现在开始正式学习/);
-  assert.match(analysis, /根据节目时长、内容长度、概念数量、观点分歧和知识密度/);
-  assert.match(analysis, /进入下一阶段条件/);
-  assert.match(analysis, /默认 2–4 轮/);
-  assert.match(analysis, /最多进行两次有针对性的补问/);
-  assert.match(analysis, /不要求每轮机械点名/);
-  assert.match(analysis, /多人节目分别列出每位可可靠识别人物/);
-  assert.match(analysis, /回答记录与阶段总结/);
-  assert.match(analysis, /用户在该阶段的真实回答/);
-  assert.match(analysis, /具体可执行的实践方案/);
-  assert.match(analysis, /本期播客的学习对话已结束/);
-  assert.match(analysis, /单集时长/);
-  assert.match(analysis, /不得声称自己是真人/);
+  assert.match(workspace, /result\.kind === "learning_prompt"/);
+  assert.match(workspace, /历史 Prompt/);
+  assert.match(workspace, /documentTab === "learning_prompt"/);
+  assert.doesNotMatch(workspace, /生成一份播客专属学习 Prompt/);
+  assert.doesNotMatch(workspace, /学习 Prompt 已生成/);
+  assert.doesNotMatch(analysis, /最高优先级：对话启动协议/);
+  assert.doesNotMatch(analysis, /播客听后深度对谈 Prompt/);
+  assert.doesNotMatch(layout, /内容梳理与学习 Prompt/);
+  assert.match(readme, /历史.*Prompt.*只读/);
+});
+
+test("wires the selectable analysis assistant sidebar", async () => {
+  const [workspace, assistant, styles, assistantRoute] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/analysis-assistant.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/episodes/[eid]/assistant/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /onTextSelection/);
+  assert.match(workspace, /问 AI/);
+  assert.match(assistant, /\/api\/episodes\/\$\{eid\}\/assistant/);
+  assert.match(assistant, /AI 助手/);
+  assert.match(assistant, /aria-label="关闭 AI 助手"/);
+  assert.doesNotMatch(assistant, /最小化 AI 助手/);
+  assert.doesNotMatch(assistant, /className="analysis-assistant-toggle"/);
+  assert.match(assistant, /展开 AI 助手/);
+  assert.match(assistant, /isCollapsed/);
+  assert.match(assistant, /requestSubmit/);
+  assert.match(assistant, /shiftKey/);
+  assert.match(assistant, /isComposing/);
+  assert.match(assistant, /analysis-assistant-details/);
+  assert.match(assistant, /analysis-assistant-identity/);
+  assert.match(assistant, /<summary><span>\{role\}<\/span>/);
+  assert.match(assistant, /htmlFor="analysis-assistant-role">身份/);
+  assert.match(assistant, /<summary><span>本次引用<\/span>/);
+  assert.doesNotMatch(assistant, /<details[^>]*\bopen\b/);
+  assert.doesNotMatch(assistant, /回答身份/);
+  assert.doesNotMatch(assistant, /CONTINUE THE THREAD/);
+  assert.doesNotMatch(assistant, /<p title=\{episodeTitle\}>/);
+  assert.match(assistant, /rows=\{2\}/);
+  assert.match(assistant, /围绕选中的内容提问/);
+  assert.match(assistant, /localStorage/);
+  assert.match(styles, /\.analysis-assistant/);
+  assert.match(styles, /\.analysis-assistant\s*\{[^}]*height:\s*100dvh/);
+  assert.match(styles, /\.analysis-assistant-messages\s*\{[^}]*flex:\s*1 1 0/);
+  assert.match(styles, /\.analysis-assistant-form\s*\{[^}]*flex:\s*0 0 auto/);
+  assert.match(styles, /\.analysis-assistant-details\s*\{/);
+  assert.match(styles, /\.analysis-assistant-details summary\s*\{/);
+  assert.match(styles, /\.analysis-assistant-title-row\s*\{/);
+  assert.match(styles, /\.analysis-assistant-identity > summary\s*\{/);
+  assert.match(styles, /\.analysis-assistant-form\s*\{[^}]*gap:\s*5px[^}]*padding:\s*8px 18px 10px/);
+  assert.match(styles, /\.analysis-assistant-form textarea\s*\{[^}]*min-height:\s*48px[^}]*max-height:\s*120px/);
+  assert.match(styles, /--analysis-assistant-width:\s*min\(430px, 50vw\)/);
+  assert.match(styles, /@media\s*\(max-width:\s*560px\)/);
+  assert.match(styles, /\.analysis-assistant\.is-collapsed/);
+  assert.match(styles, /\.document-drawer\.assistant-open\s*\{[^}]*padding-right/);
+  assert.match(workspace, /assistant-open/);
+  assert.match(workspace, /assistantWidth/);
+  assert.match(workspace, /onWidthChange/);
+  assert.match(workspace, /assistantLauncherVisible/);
+  assert.match(workspace, /analysis-assistant-launcher/);
+  assert.match(workspace, /assistantLauncherVisible && !assistantOpen/);
+  assert.match(workspace, /selectedText=\{analysisSelection\?\.text \?\? ""\}/);
+  assert.match(assistantRoute, /parseText\(body\.selectedText, "选中文本", MAX_SELECTED_TEXT, false\)/);
+  assert.match(assistantRoute, /const summaryContext = selectedText \? summarySection\.text : summaryMarkdown/);
+  assert.match(assistant, /analysis-assistant-resize-handle/);
+  assert.match(assistant, /setPointerCapture/);
+  assert.match(assistant, /onLostPointerCapture=\{finishResize\}/);
+  assert.match(assistant, /assistantDefaultWidth/);
+  assert.match(assistant, /analysis-assistant-collapsed-icon/);
+  assert.match(assistant, /aria-label="展开 AI 助手"/);
+  assert.match(assistant, /ArrowLeft/);
+  assert.match(assistant, /onDoubleClick/);
+  assert.match(assistant, /addEventListener\("resize"/);
+  assert.match(styles, /\.analysis-assistant-resize-handle\s*\{/);
+  assert.match(styles, /cursor:\s*ew-resize/);
+  assert.match(styles, /touch-action:\s*none/);
+  assert.match(styles, /\.analysis-assistant-resize-handle\s*\{[^}]*left:\s*0/);
+  assert.match(styles, /\.analysis-assistant\.is-collapsed \.analysis-assistant-resize-handle/);
+  assert.match(styles, /\.analysis-assistant\.is-collapsed\s*\{[^}]*width:\s*48px/);
+  assert.match(styles, /\.analysis-assistant-collapsed-icon\s*\{/);
+  assert.match(styles, /\.analysis-selection-action\s*\{[^}]*background:\s*var\(--ink\)/);
+  assert.match(styles, /\.analysis-selection-action\s*\{[^}]*color:\s*#fff/);
+  assert.match(styles, /\.analysis-assistant-launcher\s*\{[^}]*border:\s*1px solid var\(--ink\)/);
+  assert.match(styles, /\.analysis-assistant-launcher\s*\{[^}]*box-shadow:\s*5px 5px 0 var\(--ink\)/);
+  assert.match(workspace, /document\.addEventListener\("mousedown"/);
+  assert.match(workspace, /document\.addEventListener\("touchstart"/);
+  assert.match(workspace, /selectionHandler\(null\)/);
+  assert.doesNotMatch(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta onTextSelection/);
 });
 
 test("保留内容梳理的原文证据和分段上下文", async () => {
