@@ -142,17 +142,19 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
       </header>
 
       <div className="analysis-assistant-content" hidden={isCollapsed}>
-        <div className="analysis-assistant-role">
-          <label htmlFor="analysis-assistant-role">回答身份</label>
-          <input id="analysis-assistant-role" value={role} maxLength={160} onChange={(event) => setRole(event.target.value)} />
-          <small>只决定解释角度，事实以本期文稿为准。</small>
-        </div>
+        <details className="analysis-assistant-details">
+          <summary><span>回答身份</span><small>{role}</small></summary>
+          <div className="analysis-assistant-details-body">
+            <label htmlFor="analysis-assistant-role">回答身份</label>
+            <input id="analysis-assistant-role" value={role} maxLength={160} onChange={(event) => setRole(event.target.value)} />
+            <small>只决定解释角度，事实以本期文稿为准。</small>
+          </div>
+        </details>
 
-        <div className="analysis-assistant-context" role="status" aria-live="polite">
-          <strong>本次引用</strong>
-          <span>{context ? contextLabel(context) : "当前梳理小节 + 官方原文局部片段"}</span>
-          <blockquote>{selectedText}</blockquote>
-        </div>
+        <details className="analysis-assistant-details">
+          <summary><span>本次引用</span><small>{context ? contextLabel(context) : "梳理小节 + 官方原文片段"}</small></summary>
+          <blockquote className="analysis-assistant-details-quote" role="status" aria-live="polite">{selectedText}</blockquote>
+        </details>
 
         <div className="analysis-assistant-messages" aria-live="polite">
           {!messages.length && <p className="analysis-assistant-empty">围绕选中的内容提问。助手会优先给出原文依据，没有证据时会标明不确定。</p>}
@@ -168,7 +170,7 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
 
         <form className="analysis-assistant-form" onSubmit={submit}>
           <label htmlFor="analysis-assistant-question">继续提问</label>
-          <textarea id="analysis-assistant-question" value={question} maxLength={2_000} rows={3} placeholder="例如：这段判断的原文依据是什么？" onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleQuestionKeyDown} disabled={loading} />
+          <textarea id="analysis-assistant-question" value={question} maxLength={2_000} rows={5} placeholder="例如：这段判断的原文依据是什么？" onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleQuestionKeyDown} disabled={loading} />
           <div className="analysis-assistant-form-footer"><small>{question.length}/2000</small><button className="save-button" type="submit" disabled={loading || !question.trim()}>{loading ? "回答中…" : "发送"}</button></div>
         </form>
       </div>
