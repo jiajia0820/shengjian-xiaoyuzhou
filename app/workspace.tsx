@@ -6,7 +6,9 @@ import XiaoyuzhouCaptcha, {
   type XiaoyuzhouCaptchaHandle,
   type XiaoyuzhouCaptchaToken,
 } from "@/app/xiaoyuzhou-captcha";
+import { AnalysisAssistant } from "@/app/analysis-assistant";
 import { SpeakerDiarizationPanel } from "@/app/speaker-diarization-panel";
+import { inferAssistantRole } from "@/lib/analysis-assistant";
 import { stripRedundantAnalysisHeading } from "@/lib/analysis-format";
 import {
   cleanupProgressLabel,
@@ -48,6 +50,7 @@ type AnalysisResult = {
 };
 type Notice = { kind: "success" | "error" | "info"; text: string } | null;
 type DocumentTab = "transcript" | "summary" | "learning_prompt";
+type AnalysisSelection = { text: string; top: number; left: number };
 
 const FALLBACK_SYSTEM_FRAMEWORK: Framework = {
   id: "system-brief-v1", name: "通用内容梳理", isSystem: true, createdAt: null, updatedAt: null,
@@ -88,7 +91,14 @@ function MarkdownPreview({
   markdown,
   hideEpisodeMeta = false,
   analysisPreview = false,
-}: { markdown: string; hideEpisodeMeta?: boolean; analysisPreview?: boolean }) {
+  onTextSelection,
+}: {
+  markdown: string;
+  hideEpisodeMeta?: boolean;
+  analysisPreview?: boolean;
+  onTextSelection?: (selection: AnalysisSelection) => void;
+}) {
+  const previewRef = useRef<HTMLDivElement>(null);
   const body = useMemo(() => markdown.replace(/^---[\s\S]*?---\s*/, ""), [markdown]);
   const lines = useMemo(() => {
     let nextLines = body.split(/\r?\n/);
@@ -96,8 +106,45 @@ function MarkdownPreview({
     if (analysisPreview) nextLines = stripRedundantAnalysisHeading(nextLines);
     return nextLines;
   }, [body, hideEpisodeMeta, analysisPreview]);
+
+  useEffect(() => {
+    if (!analysisPreview || !onTextSelection) return;
+    const previewElement = previewRef.current;
+    const selectionHandler = onTextSelection;
+    if (!previewElement) return;
+
+    function reportTextSelection() {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+      const text = selection.toString().trim();
+      const range = selection.getRangeAt(0);
+      if (!text || !previewElement!.contains(range.commonAncestorContainer)) return;
+      const rect = range.getBoundingClientRect();
+      if (!rect.width && !rect.height) return;
+      selectionHandler({
+        text,
+        top: Math.min(window.innerHeight - 56, Math.max(8, rect.bottom + 8)),
+        left: Math.min(window.innerWidth - 84, Math.max(8, rect.left)),
+      });
+    }
+
+    const reportAfterMouseSelection = () => window.setTimeout(reportTextSelection, 0);
+    const reportAfterTouchSelection = () => window.setTimeout(reportTextSelection, 0);
+    previewElement.addEventListener("mouseup", reportAfterMouseSelection);
+    previewElement.addEventListener("keyup", reportTextSelection);
+    previewElement.addEventListener("touchend", reportAfterTouchSelection);
+    return () => {
+      previewElement.removeEventListener("mouseup", reportAfterMouseSelection);
+      previewElement.removeEventListener("keyup", reportTextSelection);
+      previewElement.removeEventListener("touchend", reportAfterTouchSelection);
+    };
+  }, [analysisPreview, onTextSelection]);
+
   return (
-    <div className={analysisPreview ? "markdown-preview analysis-preview" : "markdown-preview"}>
+    <div
+      ref={previewRef}
+      className={analysisPreview ? "markdown-preview analysis-preview" : "markdown-preview"}
+    >
       {lines.map((line, index) => {
         if (line.startsWith("# ")) return <h1 key={index}>{line.slice(2)}</h1>;
         if (line.startsWith("## ")) return <h2 key={index}>{line.slice(3)}</h2>;
@@ -161,6 +208,8 @@ export default function Workspace({
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
   const [analysisMarkdown, setAnalysisMarkdown] = useState("");
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisSelection, setAnalysisSelection] = useState<AnalysisSelection | null>(null);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [analysisSource, setAnalysisSource] = useState<"original" | "current">("current");
   const [selectedFrameworkId, setSelectedFrameworkId] = useState(FALLBACK_SYSTEM_FRAMEWORK.id);
@@ -309,6 +358,8 @@ export default function Workspace({
     setSelected(episode);
     setDocumentTab("transcript");
     setEditorMode("preview");
+    setAnalysisSelection(null);
+    setAssistantOpen(false);
     setDocumentLoading(true);
     setAnalysisMarkdown("");
     setCleanupStats(null);
@@ -364,6 +415,8 @@ export default function Workspace({
       setSpeakerLayoutStale(false);
       setDocumentTab("transcript");
       setEditorMode("preview");
+      setAnalysisSelection(null);
+      setAssistantOpen(false);
       const analysisData = await responseJson<{ results: AnalysisResult[] }>(
         await apiFetch(`/api/episodes/${data.episode.eid}/analyses`, { cache: "no-store" }),
       );
@@ -539,6 +592,8 @@ export default function Workspace({
 
   function switchDocumentTab(tab: DocumentTab) {
     if (cleanupProcessing) return;
+    setAnalysisSelection(null);
+    setAssistantOpen(false);
     setDocumentTab(tab);
     setEditorMode("preview");
     if (tab === "summary") void loadAnalysis(`summary:${selectedFrameworkId}`);
@@ -547,6 +602,8 @@ export default function Workspace({
 
   function changeFramework(id: string) {
     setSelectedFrameworkId(id);
+    setAnalysisSelection(null);
+    setAssistantOpen(false);
     if (documentTab === "summary") void loadAnalysis(`summary:${id}`);
   }
 
@@ -1127,7 +1184,11 @@ export default function Workspace({
             ) : generating ? (
               <div className="analysis-empty"><span>AI</span><h3>正在覆盖全文并生成 Markdown</h3><p>长文稿会先分段提炼，再统一汇总。请保持页面打开。</p></div>
             ) : analysisMarkdown ? (
-              <MarkdownPreview markdown={analysisMarkdown} analysisPreview={documentTab === "summary"} />
+              <MarkdownPreview
+                markdown={analysisMarkdown}
+                analysisPreview={documentTab === "summary"}
+                onTextSelection={documentTab === "summary" ? setAnalysisSelection : undefined}
+              />
             ) : documentTab === "summary" ? (
               <div className="analysis-empty">
                 <span>纲</span>
@@ -1142,6 +1203,27 @@ export default function Workspace({
               </div>
             )}
           </div>
+          {documentTab === "summary" && analysisSelection && !assistantOpen && (
+            <button
+              className="analysis-selection-action"
+              type="button"
+              style={{ top: analysisSelection.top, left: analysisSelection.left }}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setAssistantOpen(true)}
+            >问 AI</button>
+          )}
+          {documentTab === "summary" && analysisSelection && assistantOpen && (
+            <AnalysisAssistant
+              key={`${selected.eid}:${selectedSlot}`}
+              eid={selected.eid}
+              episodeTitle={selected.title}
+              podcastTitle={selected.podcastTitle}
+              slot={selectedSlot}
+              selectedText={analysisSelection.text}
+              defaultRole={inferAssistantRole(`${selected.podcastTitle} ${selected.title}`, analysisSelection.text)}
+              onClose={() => { setAssistantOpen(false); setAnalysisSelection(null); }}
+            />
+          )}
         </div>
       )}
     </main>

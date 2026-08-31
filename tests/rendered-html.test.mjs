@@ -185,7 +185,10 @@ test("hides the episode metadata block only from transcript reading preview", as
   const workspace = await readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8");
   assert.match(workspace, /function stripEpisodeMetaFromPreview/);
   assert.match(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta \/>/);
-  assert.match(workspace, /<MarkdownPreview markdown=\{analysisMarkdown\} analysisPreview=\{documentTab === "summary"\} \/>/);
+  assert.match(
+    workspace,
+    /<MarkdownPreview[\s\S]*markdown=\{analysisMarkdown\}[\s\S]*analysisPreview=\{documentTab === "summary"\}[\s\S]*\/>/,
+  );
   assert.match(workspace, /节目：/);
   assert.match(workspace, /原始单集：/);
 });
@@ -473,6 +476,22 @@ test("keeps legacy learning prompts read-only", async () => {
   assert.doesNotMatch(analysis, /播客听后深度对谈 Prompt/);
   assert.doesNotMatch(layout, /内容梳理与学习 Prompt/);
   assert.match(readme, /历史.*Prompt.*只读/);
+});
+
+test("wires the selectable analysis assistant sidebar", async () => {
+  const [workspace, assistant, styles] = await Promise.all([
+    readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/analysis-assistant.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /onTextSelection/);
+  assert.match(workspace, /问 AI/);
+  assert.match(assistant, /\/api\/episodes\/\$\{eid\}\/assistant/);
+  assert.match(assistant, /AI 助手/);
+  assert.match(assistant, /aria-label="关闭 AI 助手"/);
+  assert.match(assistant, /localStorage/);
+  assert.match(styles, /\.analysis-assistant/);
+  assert.doesNotMatch(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta onTextSelection/);
 });
 
 test("保留内容梳理的原文证据和分段上下文", async () => {
