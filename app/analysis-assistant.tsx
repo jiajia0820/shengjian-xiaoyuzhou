@@ -169,7 +169,7 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
 
         <form className="analysis-assistant-form" onSubmit={submit}>
           <label htmlFor="analysis-assistant-question">继续提问</label>
-          <textarea id="analysis-assistant-question" value={question} maxLength={2_000} rows={3} placeholder="例如：这段判断的原文依据是什么？" onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleQuestionKeyDown} disabled={loading} />
+          <textarea id="analysis-assistant-question" value={question} maxLength={2_000} rows={2} placeholder="例如：这段判断的原文依据是什么？" onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleQuestionKeyDown} disabled={loading} />
           <div className="analysis-assistant-form-footer"><small>{question.length}/2000</small><button className="save-button" type="submit" disabled={loading || !question.trim()}>{loading ? "回答中…" : "发送"}</button></div>
         </form>
       </div>

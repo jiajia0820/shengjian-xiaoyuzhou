@@ -504,7 +504,7 @@ test("wires the selectable analysis assistant sidebar", async () => {
   assert.doesNotMatch(assistant, /回答身份/);
   assert.doesNotMatch(assistant, /CONTINUE THE THREAD/);
   assert.doesNotMatch(assistant, /<p title=\{episodeTitle\}>/);
-  assert.match(assistant, /rows=\{3\}/);
+  assert.match(assistant, /rows=\{2\}/);
   assert.match(assistant, /围绕选中的内容提问/);
   assert.match(assistant, /localStorage/);
   assert.match(styles, /\.analysis-assistant/);
@@ -515,7 +515,8 @@ test("wires the selectable analysis assistant sidebar", async () => {
   assert.match(styles, /\.analysis-assistant-details summary\s*\{/);
   assert.match(styles, /\.analysis-assistant-title-row\s*\{/);
   assert.match(styles, /\.analysis-assistant-identity > summary\s*\{/);
-  assert.match(styles, /\.analysis-assistant-form textarea\s*\{[^}]*min-height:\s*64px/);
+  assert.match(styles, /\.analysis-assistant-form\s*\{[^}]*gap:\s*5px[^}]*padding:\s*8px 18px 10px/);
+  assert.match(styles, /\.analysis-assistant-form textarea\s*\{[^}]*min-height:\s*48px[^}]*max-height:\s*120px/);
   assert.match(styles, /--analysis-assistant-width:\s*min\(430px, 50vw\)/);
   assert.match(styles, /@media\s*\(max-width:\s*560px\)/);
   assert.match(styles, /\.analysis-assistant\.is-collapsed/);

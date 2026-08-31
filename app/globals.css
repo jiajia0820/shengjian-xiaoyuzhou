@@ -368,8 +368,8 @@ h2 { margin: 10px 0 0; font-size: clamp(38px, 5vw, 68px); letter-spacing: -.045e
 .analysis-assistant-loading, .analysis-assistant-error { margin: 10px 0; padding: 10px 12px; font-size: 12px; line-height: 1.5; }
 .analysis-assistant-loading { background: var(--cream); color: #74766e; }
 .analysis-assistant-error { border-left: 3px solid var(--orange); background: #fff1eb; color: #a43f26; }
-.analysis-assistant-form { display: grid; gap: 7px; flex: 0 0 auto; padding: 10px 18px 14px; background: #fffdf7; border-top: 1px solid var(--line); }
-.analysis-assistant-form textarea { min-height: 64px; max-height: 160px; resize: vertical; line-height: 1.5; }
+.analysis-assistant-form { display: grid; gap: 5px; flex: 0 0 auto; padding: 8px 18px 10px; background: #fffdf7; border-top: 1px solid var(--line); }
+.analysis-assistant-form textarea { min-height: 48px; max-height: 120px; resize: vertical; line-height: 1.45; }
 .analysis-assistant-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .analysis-assistant-form-footer small { color: #74766e; font: 10px/1 var(--font-geist-mono); }
 .analysis-assistant-form-footer button { min-height: 44px; padding: 9px 17px; border: 1px solid var(--ink); cursor: pointer; }
