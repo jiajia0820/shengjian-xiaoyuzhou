@@ -479,17 +479,19 @@ test("keeps legacy learning prompts read-only", async () => {
 });
 
 test("wires the selectable analysis assistant sidebar", async () => {
-  const [workspace, assistant, styles] = await Promise.all([
+  const [workspace, assistant, styles, assistantRoute] = await Promise.all([
     readFile(new URL("../app/workspace.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/analysis-assistant.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/episodes/[eid]/assistant/route.ts", import.meta.url), "utf8"),
   ]);
   assert.match(workspace, /onTextSelection/);
   assert.match(workspace, /问 AI/);
   assert.match(assistant, /\/api\/episodes\/\$\{eid\}\/assistant/);
   assert.match(assistant, /AI 助手/);
   assert.match(assistant, /aria-label="关闭 AI 助手"/);
-  assert.match(assistant, /最小化 AI 助手/);
+  assert.doesNotMatch(assistant, /最小化 AI 助手/);
+  assert.doesNotMatch(assistant, /className="analysis-assistant-toggle"/);
   assert.match(assistant, /展开 AI 助手/);
   assert.match(assistant, /isCollapsed/);
   assert.match(assistant, /requestSubmit/);
@@ -522,6 +524,37 @@ test("wires the selectable analysis assistant sidebar", async () => {
   assert.match(styles, /\.analysis-assistant\.is-collapsed/);
   assert.match(styles, /\.document-drawer\.assistant-open\s*\{[^}]*padding-right/);
   assert.match(workspace, /assistant-open/);
+  assert.match(workspace, /assistantWidth/);
+  assert.match(workspace, /onWidthChange/);
+  assert.match(workspace, /assistantLauncherVisible/);
+  assert.match(workspace, /analysis-assistant-launcher/);
+  assert.match(workspace, /assistantLauncherVisible && !assistantOpen/);
+  assert.match(workspace, /selectedText=\{analysisSelection\?\.text \?\? ""\}/);
+  assert.match(assistantRoute, /parseText\(body\.selectedText, "选中文本", MAX_SELECTED_TEXT, false\)/);
+  assert.match(assistantRoute, /const summaryContext = selectedText \? summarySection\.text : summaryMarkdown/);
+  assert.match(assistant, /analysis-assistant-resize-handle/);
+  assert.match(assistant, /setPointerCapture/);
+  assert.match(assistant, /onLostPointerCapture=\{finishResize\}/);
+  assert.match(assistant, /assistantDefaultWidth/);
+  assert.match(assistant, /analysis-assistant-collapsed-icon/);
+  assert.match(assistant, /aria-label="展开 AI 助手"/);
+  assert.match(assistant, /ArrowLeft/);
+  assert.match(assistant, /onDoubleClick/);
+  assert.match(assistant, /addEventListener\("resize"/);
+  assert.match(styles, /\.analysis-assistant-resize-handle\s*\{/);
+  assert.match(styles, /cursor:\s*ew-resize/);
+  assert.match(styles, /touch-action:\s*none/);
+  assert.match(styles, /\.analysis-assistant-resize-handle\s*\{[^}]*left:\s*0/);
+  assert.match(styles, /\.analysis-assistant\.is-collapsed \.analysis-assistant-resize-handle/);
+  assert.match(styles, /\.analysis-assistant\.is-collapsed\s*\{[^}]*width:\s*48px/);
+  assert.match(styles, /\.analysis-assistant-collapsed-icon\s*\{/);
+  assert.match(styles, /\.analysis-selection-action\s*\{[^}]*background:\s*var\(--ink\)/);
+  assert.match(styles, /\.analysis-selection-action\s*\{[^}]*color:\s*#fff/);
+  assert.match(styles, /\.analysis-assistant-launcher\s*\{[^}]*border:\s*1px solid var\(--ink\)/);
+  assert.match(styles, /\.analysis-assistant-launcher\s*\{[^}]*box-shadow:\s*5px 5px 0 var\(--ink\)/);
+  assert.match(workspace, /document\.addEventListener\("mousedown"/);
+  assert.match(workspace, /document\.addEventListener\("touchstart"/);
+  assert.match(workspace, /selectionHandler\(null\)/);
   assert.doesNotMatch(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta onTextSelection/);
 });
 

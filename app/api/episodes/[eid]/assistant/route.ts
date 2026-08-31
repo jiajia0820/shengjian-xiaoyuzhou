@@ -65,20 +65,21 @@ export async function POST(request: Request, context: Context) {
     if (!result || result.kind !== "summary" || result.slot !== slot) {
       throw new HttpError(404, "ANALYSIS_NOT_FOUND", "还没有生成这份内容梳理");
     }
-    const selectedText = parseText(body.selectedText, "选中文本", MAX_SELECTED_TEXT);
+    const selectedText = parseText(body.selectedText, "选中文本", MAX_SELECTED_TEXT, false);
     const role = parseText(body.role, "助手身份", MAX_ROLE, false) || "本期主题研究顾问";
     const question = parseText(body.question, "问题", 2_000);
     const history = parseHistory(body.history);
 
     const summaryMarkdown = await readMarkdown(result.result_key);
     const summarySection = extractSummarySection(summaryMarkdown, selectedText);
+    const summaryContext = selectedText ? summarySection.text : summaryMarkdown;
     let originalMarkdown: string | null = null;
     try {
       originalMarkdown = await readMarkdown(episode.original_key);
     } catch {
       originalMarkdown = null;
     }
-    const originalContext = buildOriginalContext(originalMarkdown, `${selectedText}\n${summarySection.text}`);
+    const originalContext = buildOriginalContext(originalMarkdown, `${selectedText}\n${summaryContext}`);
     const config = await readActiveAiConfiguration(user.userId);
     if (!await consumeUsage(user.userId, "ai", 20)) {
       throw new HttpError(429, "DAILY_AI_LIMIT", "今天的 20 次 AI 生成额度已用完，请明天再试");
@@ -89,7 +90,7 @@ export async function POST(request: Request, context: Context) {
       podcastTitle: episode.podcast_title,
       role,
       selectedText,
-      summarySection: summarySection.text,
+      summarySection: summaryContext,
       originalContext,
       history,
       question,

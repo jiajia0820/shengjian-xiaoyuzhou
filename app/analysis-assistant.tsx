@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, type KeyboardEvent, type PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "@/lib/auth-client";
 
 type Message = { role: "user" | "assistant"; content: string; createdAt: string };
@@ -19,11 +19,34 @@ type Props = {
   defaultRole: string;
   onClose: () => void;
   onCollapsedChange?: (collapsed: boolean) => void;
+  assistantWidth?: number | null;
+  onWidthChange?: (width: number) => void;
+  onWidthReset?: () => void;
 };
 
 const STORAGE_PREFIX = "shengjian:analysis-assistant:v1:";
 const MAX_MESSAGES = 20;
 const MAX_MESSAGE_CHARS = 8_000;
+const MIN_ASSISTANT_WIDTH = 320;
+const MAX_ASSISTANT_WIDTH = 720;
+
+function assistantDefaultWidth(viewportWidth = typeof window === "undefined" ? 1280 : window.innerWidth): number {
+  return viewportWidth <= 720 ? Math.min(430, Math.max(240, viewportWidth * 0.5)) : 430;
+}
+
+function assistantWidthBounds(): { min: number; max: number } {
+  const viewportWidth = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const min = viewportWidth <= 720
+    ? Math.min(MIN_ASSISTANT_WIDTH, Math.max(240, viewportWidth * 0.5))
+    : MIN_ASSISTANT_WIDTH;
+  const max = Math.max(min, Math.min(MAX_ASSISTANT_WIDTH, viewportWidth - 280));
+  return { min, max };
+}
+
+function clampAssistantWidth(width: number): number {
+  const bounds = assistantWidthBounds();
+  return Math.round(Math.min(bounds.max, Math.max(bounds.min, width)));
+}
 
 function storageKey(eid: string): string {
   return `${STORAGE_PREFIX}${encodeURIComponent(eid)}`;
@@ -66,7 +89,7 @@ function messageTime(value: string): string {
   return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
-export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selectedText, defaultRole, onClose, onCollapsedChange }: Props) {
+export function AnalysisAssistant({ eid, slot, selectedText, defaultRole, onClose, onCollapsedChange, assistantWidth, onWidthChange, onWidthReset }: Props) {
   const initialSession = useMemo(() => readSession(eid, defaultRole), [eid, defaultRole]);
   const [role, setRole] = useState(initialSession.role);
   const [messages, setMessages] = useState<Message[]>(initialSession.messages);
@@ -75,6 +98,9 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const assistantRef = useRef<HTMLElement>(null);
+  const resizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
     try {
@@ -83,6 +109,18 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
       // 浏览器禁用本地存储时仍可继续当前会话。
     }
   }, [eid, messages, role]);
+
+  useEffect(() => {
+    if (assistantWidth == null) return;
+    const width = assistantWidth;
+    function syncAssistantWidth() {
+      if (window.innerWidth <= 560) return;
+      const next = clampAssistantWidth(width);
+      if (next !== width) onWidthChange?.(next);
+    }
+    window.addEventListener("resize", syncAssistantWidth);
+    return () => window.removeEventListener("resize", syncAssistantWidth);
+  }, [assistantWidth, onWidthChange]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -121,8 +159,79 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
     onCollapsedChange?.(next);
   }
 
+  function startResize(event: PointerEvent<HTMLDivElement>) {
+    if (typeof window !== "undefined" && window.innerWidth <= 560) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: assistantRef.current?.getBoundingClientRect().width ?? assistantWidth ?? assistantDefaultWidth(),
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsResizing(true);
+    event.preventDefault();
+  }
+
+  function moveResize(event: PointerEvent<HTMLDivElement>) {
+    const resize = resizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    onWidthChange?.(clampAssistantWidth(resize.startWidth + resize.startX - event.clientX));
+    event.preventDefault();
+  }
+
+  function finishResize(event: PointerEvent<HTMLDivElement>) {
+    const resize = resizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    resizeRef.current = null;
+    setIsResizing(false);
+  }
+
+  function adjustResize(event: KeyboardEvent<HTMLDivElement>) {
+    if (typeof window !== "undefined" && window.innerWidth <= 560) return;
+    const bounds = assistantWidthBounds();
+    const current = clampAssistantWidth(assistantRef.current?.getBoundingClientRect().width ?? assistantWidth ?? 430);
+    let next = current;
+    if (event.key === "ArrowLeft") next += 24;
+    else if (event.key === "ArrowRight") next -= 24;
+    else if (event.key === "Home") next = bounds.min;
+    else if (event.key === "End") next = bounds.max;
+    else return;
+    event.preventDefault();
+    onWidthChange?.(clampAssistantWidth(next));
+  }
+
+  const resizeBounds = assistantWidthBounds();
+  const resizeValue = Math.round(clampAssistantWidth(assistantWidth ?? assistantDefaultWidth()));
+
+  /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
   return (
-    <aside className={`analysis-assistant${isCollapsed ? " is-collapsed" : ""}`} aria-label="AI 助手">
+    <aside ref={assistantRef} className={`analysis-assistant${isCollapsed ? " is-collapsed" : ""}`} aria-label="AI 助手">
+      <button
+        className="analysis-assistant-collapsed-icon"
+        type="button"
+        hidden={!isCollapsed}
+        onClick={toggleCollapsed}
+        aria-label="展开 AI 助手"
+        title="展开 AI 助手"
+      >AI</button>
+      <div
+        className={`analysis-assistant-resize-handle${isResizing ? " is-active" : ""}`}
+        role="separator"
+        tabIndex={0}
+        aria-label="调整 AI 助手宽度"
+        aria-orientation="vertical"
+        aria-valuemin={resizeBounds.min}
+        aria-valuemax={resizeBounds.max}
+        aria-valuenow={resizeValue}
+        onPointerDown={startResize}
+        onPointerMove={moveResize}
+        onPointerUp={finishResize}
+        onPointerCancel={finishResize}
+        onLostPointerCapture={finishResize}
+        onDoubleClick={() => onWidthReset?.()}
+        onKeyDown={adjustResize}
+      />
       <header className="analysis-assistant-header">
         <div className="analysis-assistant-header-copy">
           <div className="analysis-assistant-title-row">
@@ -138,13 +247,6 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
           </div>
         </div>
         <div className="analysis-assistant-header-actions">
-          <button
-            className="analysis-assistant-toggle"
-            type="button"
-            onClick={toggleCollapsed}
-            aria-label={isCollapsed ? "展开 AI 助手" : "最小化 AI 助手"}
-            aria-expanded={!isCollapsed}
-          >{isCollapsed ? "＋" : "−"}</button>
           <button className="analysis-assistant-close" type="button" onClick={onClose} aria-label="关闭 AI 助手">×</button>
         </div>
       </header>
@@ -152,11 +254,11 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
       <div className="analysis-assistant-content" hidden={isCollapsed}>
         <details className="analysis-assistant-details">
           <summary><span>本次引用</span><small>{context ? contextLabel(context) : "梳理小节 + 官方原文片段"}</small></summary>
-          <blockquote className="analysis-assistant-details-quote" role="status" aria-live="polite">{selectedText}</blockquote>
+          <blockquote className="analysis-assistant-details-quote" role="status" aria-live="polite">{selectedText || "未选中文字，将结合整份内容梳理。"}</blockquote>
         </details>
 
         <div className="analysis-assistant-messages" aria-live="polite">
-          {!messages.length && <p className="analysis-assistant-empty">围绕选中的内容提问。助手会优先给出原文依据，没有证据时会标明不确定。</p>}
+          {!messages.length && <p className="analysis-assistant-empty">{selectedText ? "围绕选中的内容提问。" : "可以先提问整份内容梳理，选中文字后会优先结合该段原文。"}助手会优先给出原文依据，没有证据时会标明不确定。</p>}
           {messages.map((message, index) => (
             <article className={`analysis-assistant-message ${message.role}`} key={`${message.createdAt}-${index}`}>
               <div className="analysis-assistant-message-meta">{message.role === "user" ? "你" : "AI"}{messageTime(message.createdAt) ? ` · ${messageTime(message.createdAt)}` : ""}</div>
@@ -175,4 +277,5 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
       </div>
     </aside>
   );
+  /* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
 }

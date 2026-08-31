@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { apiFetch, downloadWithAuth, type Viewer } from "@/lib/auth-client";
 import XiaoyuzhouCaptcha, {
   type XiaoyuzhouCaptchaHandle,
@@ -96,7 +96,7 @@ function MarkdownPreview({
   markdown: string;
   hideEpisodeMeta?: boolean;
   analysisPreview?: boolean;
-  onTextSelection?: (selection: AnalysisSelection) => void;
+  onTextSelection?: (selection: AnalysisSelection | null) => void;
 }) {
   const previewRef = useRef<HTMLDivElement>(null);
   const body = useMemo(() => markdown.replace(/^---[\s\S]*?---\s*/, ""), [markdown]);
@@ -115,12 +115,21 @@ function MarkdownPreview({
 
     function reportTextSelection() {
       const selection = window.getSelection();
-      if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+      if (!selection || selection.isCollapsed || !selection.rangeCount) {
+        selectionHandler(null);
+        return;
+      }
       const text = selection.toString().trim();
       const range = selection.getRangeAt(0);
-      if (!text || !previewElement!.contains(range.commonAncestorContainer)) return;
+      if (!text || !previewElement!.contains(range.commonAncestorContainer)) {
+        selectionHandler(null);
+        return;
+      }
       const rect = range.getBoundingClientRect();
-      if (!rect.width && !rect.height) return;
+      if (!rect.width && !rect.height) {
+        selectionHandler(null);
+        return;
+      }
       selectionHandler({
         text,
         top: Math.min(window.innerHeight - 56, Math.max(8, rect.bottom + 8)),
@@ -130,13 +139,22 @@ function MarkdownPreview({
 
     const reportAfterMouseSelection = () => window.setTimeout(reportTextSelection, 0);
     const reportAfterTouchSelection = () => window.setTimeout(reportTextSelection, 0);
+    const clearSelectionOnPointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".analysis-assistant, .analysis-assistant-launcher, .analysis-selection-action")) return;
+      selectionHandler(null);
+    };
     previewElement.addEventListener("mouseup", reportAfterMouseSelection);
     previewElement.addEventListener("keyup", reportTextSelection);
     previewElement.addEventListener("touchend", reportAfterTouchSelection);
+    document.addEventListener("mousedown", clearSelectionOnPointerDown);
+    document.addEventListener("touchstart", clearSelectionOnPointerDown);
     return () => {
       previewElement.removeEventListener("mouseup", reportAfterMouseSelection);
       previewElement.removeEventListener("keyup", reportTextSelection);
       previewElement.removeEventListener("touchend", reportAfterTouchSelection);
+      document.removeEventListener("mousedown", clearSelectionOnPointerDown);
+      document.removeEventListener("touchstart", clearSelectionOnPointerDown);
     };
   }, [analysisPreview, onTextSelection]);
 
@@ -211,6 +229,7 @@ export default function Workspace({
   const [analysisSelection, setAnalysisSelection] = useState<AnalysisSelection | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantCollapsed, setAssistantCollapsed] = useState(false);
+  const [assistantWidth, setAssistantWidth] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
   const [analysisSource, setAnalysisSource] = useState<"original" | "current">("current");
   const [selectedFrameworkId, setSelectedFrameworkId] = useState(FALLBACK_SYSTEM_FRAMEWORK.id);
@@ -294,7 +313,9 @@ export default function Workspace({
   const selectedSlot = documentTab === "summary" ? `summary:${selectedFrameworkId}`
     : documentTab === "learning_prompt" ? "learning_prompt" : "";
   const selectedAnalysis = analysisResults.find((result) => result.slot === selectedSlot) ?? null;
-  const assistantVisible = Boolean(documentTab === "summary" && analysisSelection && assistantOpen && !assistantCollapsed);
+  const assistantLauncherVisible = Boolean(documentTab === "summary" && (analysisMarkdown || selectedAnalysis));
+  const assistantVisible = Boolean(assistantLauncherVisible && assistantOpen && !assistantCollapsed);
+  const assistantWidthStyle = assistantWidth ? { "--analysis-assistant-width": `${assistantWidth}px` } as CSSProperties : undefined;
   const hasLegacyLearningPrompt = analysisResults.some((result) => result.kind === "learning_prompt");
   const selectedFramework = frameworkOptions.find((item) => item.id === selectedFrameworkId) ?? null;
 
@@ -1095,7 +1116,7 @@ export default function Workspace({
       )}
 
       {selected && (
-        <div className={`document-drawer${assistantVisible ? " assistant-open" : ""}`} role="dialog" aria-modal="true" aria-labelledby="document-title">
+        <div className={`document-drawer${assistantVisible ? " assistant-open" : ""}`} style={assistantWidthStyle} role="dialog" aria-modal="true" aria-labelledby="document-title">
           <div className="document-sticky-header">
             <div className="drawer-header">
               <div><span>{selected.podcastTitle}</span><h2 id="document-title">{selected.title}</h2></div>
@@ -1209,6 +1230,15 @@ export default function Workspace({
               </div>
             )}
           </div>
+          {assistantLauncherVisible && !assistantOpen && (
+            <button
+              className="analysis-assistant-launcher"
+              type="button"
+              onClick={() => setAssistantOpen(true)}
+              aria-label="打开 AI 助手"
+              title="打开 AI 助手"
+            >AI</button>
+          )}
           {documentTab === "summary" && analysisSelection && !assistantOpen && (
             <button
               className="analysis-selection-action"
@@ -1218,16 +1248,19 @@ export default function Workspace({
               onClick={() => setAssistantOpen(true)}
             >问 AI</button>
           )}
-          {documentTab === "summary" && analysisSelection && assistantOpen && (
+          {assistantLauncherVisible && assistantOpen && (
             <AnalysisAssistant
               key={`${selected.eid}:${selectedSlot}`}
               eid={selected.eid}
               episodeTitle={selected.title}
               podcastTitle={selected.podcastTitle}
               slot={selectedSlot}
-              selectedText={analysisSelection.text}
-              defaultRole={inferAssistantRole(`${selected.podcastTitle} ${selected.title}`, analysisSelection.text)}
+              selectedText={analysisSelection?.text ?? ""}
+              defaultRole={inferAssistantRole(`${selected.podcastTitle} ${selected.title}`, analysisSelection?.text ?? "")}
               onCollapsedChange={setAssistantCollapsed}
+              assistantWidth={assistantWidth}
+              onWidthChange={setAssistantWidth}
+              onWidthReset={() => setAssistantWidth(null)}
               onClose={() => { setAssistantOpen(false); setAssistantCollapsed(false); setAnalysisSelection(null); }}
             />
           )}
