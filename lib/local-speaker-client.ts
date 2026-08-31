@@ -65,7 +65,7 @@ export function localSpeakerErrorMessage(code: string | null): string {
     case "VOICEPRINT_REFERENCES_INVALID": return "两段参考音频需各为 5–30 秒、位于音频内且不能重叠";
     case "VOICEPRINT_REFERENCES_TOO_SHORT": return "参考片段中的有效语音不足 3 秒，请换一段只有一人连续说话的音频";
     case "VOICEPRINT_MODEL_UNAVAILABLE": return "声纹模型不可用，请检查 Hugging Face 登录和网络";
-    case "VOICEPRINT_LOW_CONFIDENCE": return "声纹置信度不足，请换用更干净的参考片段或改用全自动识别";
+    case "VOICEPRINT_LOW_CONFIDENCE": return "声纹置信度不足，请换用更干净的参考片段";
     case "VOICEPRINT_FAILED": return "本地声纹识别失败，请检查音频和参考片段";
     default: return "本地说话人服务请求失败";
   }

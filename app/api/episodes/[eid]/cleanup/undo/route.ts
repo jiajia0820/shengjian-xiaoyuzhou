@@ -34,7 +34,7 @@ function validHash(value: unknown): value is string {
 
 function safeError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
-  return new HttpError(502, "CLEANUP_UNDO_ERROR", "撤销 AI 清理暂时失败，请稍后重试");
+  return new HttpError(502, "CLEANUP_UNDO_ERROR", "撤销 AI 整理暂时失败，请稍后重试");
 }
 
 function parseSnapshot(raw: string, eid: string): CleanupSnapshot {
@@ -42,10 +42,10 @@ function parseSnapshot(raw: string, eid: string): CleanupSnapshot {
   try {
     value = JSON.parse(raw);
   } catch {
-    throw new HttpError(409, "CLEANUP_SNAPSHOT_INVALID", "AI 清理快照无效，请重新执行清理");
+    throw new HttpError(409, "CLEANUP_SNAPSHOT_INVALID", "AI 整理快照无效，请重新执行整理");
   }
   if (!value || typeof value !== "object") {
-    throw new HttpError(409, "CLEANUP_SNAPSHOT_INVALID", "AI 清理快照无效，请重新执行清理");
+    throw new HttpError(409, "CLEANUP_SNAPSHOT_INVALID", "AI 整理快照无效，请重新执行整理");
   }
   const snapshot = value as Record<string, unknown>;
   if (snapshot.schemaVersion !== 1
@@ -62,7 +62,7 @@ function parseSnapshot(raw: string, eid: string): CleanupSnapshot {
     || typeof snapshot.model !== "string"
     || !snapshot.model
     || !snapshot.stats || typeof snapshot.stats !== "object") {
-    throw new HttpError(409, "CLEANUP_SNAPSHOT_INVALID", "AI 清理快照无效，请重新执行清理");
+    throw new HttpError(409, "CLEANUP_SNAPSHOT_INVALID", "AI 整理快照无效，请重新执行整理");
   }
   return {
     schemaVersion: 1,
@@ -108,13 +108,13 @@ export async function POST(request: Request, context: Context) {
       rawSnapshot = await readJson(keys.aiCleanupSnapshotKey);
     } catch (error) {
       if (error instanceof HttpError && error.status === 404) {
-        throw new HttpError(404, "CLEANUP_SNAPSHOT_NOT_FOUND", "没有可撤销的 AI 清理记录");
+        throw new HttpError(404, "CLEANUP_SNAPSHOT_NOT_FOUND", "没有可撤销的 AI 整理记录");
       }
-      throw new HttpError(502, "CLEANUP_SNAPSHOT_READ_FAILED", "AI 清理快照暂时无法读取，请稍后重试");
+      throw new HttpError(502, "CLEANUP_SNAPSHOT_READ_FAILED", "AI 整理快照暂时无法读取，请稍后重试");
     }
     const snapshot = parseSnapshot(rawSnapshot, eid);
     if ((await sha256Hex(snapshot.beforeMarkdown)).toLowerCase() !== snapshot.beforeHash) {
-      throw new HttpError(409, "CLEANUP_SNAPSHOT_INVALID", "AI 清理快照无效，请重新执行清理");
+      throw new HttpError(409, "CLEANUP_SNAPSHOT_INVALID", "AI 整理快照无效，请重新执行整理");
     }
 
     const currentObject = await readMarkdownWithEtag(episode.current_key);

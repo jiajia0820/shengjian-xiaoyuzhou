@@ -81,6 +81,48 @@ test("wires a remote episode-audio speaker review panel into the transcript tool
   assert.doesNotMatch(client, /credentials:\s*["']include["']/);
 });
 
+test("removes the redundant speaker modal audio processing description", async () => {
+  const panel = await readFile(new URL("../app/speaker-diarization-panel.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(panel, /系统从当前小宇宙单集获取官方音频/);
+});
+
+test("uses fixed two-speaker voiceprint inputs in minutes and seconds", async () => {
+  const panel = await readFile(new URL("../app/speaker-diarization-panel.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(panel, /识别模式/);
+  assert.doesNotMatch(panel, /说话人数/);
+  assert.doesNotMatch(panel, /全自动识别|自动判断/);
+  assert.match(panel, /两人声纹/);
+  assert.match(panel, /开始（分:秒）/);
+  assert.match(panel, /结束（分:秒）/);
+  assert.match(panel, /type="text"/);
+  assert.match(panel, /placeholder="例如 10:39"/);
+  assert.match(panel, /parseVoiceprintTimestamp/);
+});
+
+test("keeps the speaker modal close control visible without an action color bar", async () => {
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const closeRule = styles.match(/\.speaker-diarization-modal\s*>\s*\.modal-close\s*\{([^}]*)\}/)?.[1] ?? "";
+  const actionRules = styles.match(/\.speaker-modal-actions\s*\{([^}]*)\}/g) ?? [];
+
+  assert.match(closeRule, /position:\s*sticky/);
+  assert.match(closeRule, /top:\s*\d+/);
+  assert.match(closeRule, /z-index:\s*\d+/);
+  assert.match(closeRule, /align-self:\s*flex-end/);
+  assert.ok(actionRules.length > 0);
+  for (const rule of actionRules) assert.match(rule, /background:\s*transparent/);
+});
+
+test("centers speaker progress text inside its status background", async () => {
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const progressRule = styles.match(/\.speaker-progress\s*\{([^}]*)\}/)?.[1] ?? "";
+
+  assert.match(progressRule, /display:\s*flex/);
+  assert.match(progressRule, /align-items:\s*center/);
+  assert.match(progressRule, /min-height:\s*40px/);
+});
+
 test("lets the document drawer scroll as one reading surface", async () => {
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const drawer = styles.match(/\.document-drawer\s*\{([^}]*)\}/)?.[1] ?? "";
@@ -200,6 +242,7 @@ test("wires AI transcript cleanup controls and hash-protected requests", async (
   assert.match(workspace, /repetitionsMerged|repetition/);
   assert.match(workspace, /typosFixed|typo/);
   assert.match(workspace, /unprocessedBlocks|unprocessed/);
+  assert.match(workspace, /cleanupFallbackBatches|模型输出异常|本地规则保底/);
   assert.match(workspace, /disabled=\{cleanupProcessing/);
 });
 
@@ -208,7 +251,7 @@ test("shows chunk progress for long local speaker jobs", async () => {
   assert.match(panel, /第 \$\{chunkIndex\}\/\$\{chunkCount\} 块/);
 });
 
-test("documents the two-speaker voiceprint workflow and fallback", async () => {
+test("documents the fixed two-speaker voiceprint workflow", async () => {
   const [rootReadme, localReadme] = await Promise.all([
     readFile(new URL("../README.md", import.meta.url), "utf8"),
     readFile(new URL("../local-audio-service/README.md", import.meta.url), "utf8"),
@@ -216,10 +259,12 @@ test("documents the two-speaker voiceprint workflow and fallback", async () => {
   for (const content of [rootReadme, localReadme]) {
     assert.match(content, /已有小宇宙文稿/);
     assert.match(content, /5[–-]30 秒/);
+    assert.match(content, /固定使用[“"]?两人声纹/);
+    assert.match(content, /分:秒/);
     assert.match(content, /低置信度/);
     assert.match(content, /Hugging Face/);
     assert.match(content, /本机处理/);
-    assert.match(content, /全自动/);
+    assert.doesNotMatch(content, /选择[“"]?全自动识别|切换回全自动识别|全自动模式/);
   }
 });
 

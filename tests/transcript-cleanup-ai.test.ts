@@ -143,6 +143,73 @@ test("批次部分失败时失败块保持原文且统计仅计入已验证变�
   assert.match(result.markdown, /内容对错，真的吗。yyyy/);
 });
 
+test("模型只返回有变化的片段时，其余片段仍保留并视为已处理", async () => {
+  const source = `## 官方文稿\n\n### 主播\n\n[00:00:01] 嗯，今天开始。\n\n[00:00:02] 第二段保持原样。\n\n[00:00:03] 第三段也保持原样。\n`;
+  const result = await runTranscriptCleanup({
+    markdown: source,
+    config,
+    executeModel: async (_config, request) => {
+      const input = JSON.parse(request.input) as { blocks: Array<{ id: string }> };
+      return {
+        text: response([
+          {
+            id: input.blocks[0].id,
+            text: "今天开始。",
+            changes: [{ type: "filler", from: "嗯，", to: "", confidence: 1 }],
+          },
+        ]),
+      };
+    },
+  });
+
+  assert.match(result.markdown, /\[00:00:01\] 今天开始。/);
+  assert.match(result.markdown, /\[00:00:02\] 第二段保持原样。/);
+  assert.equal(result.stats.processedBlocks, 3);
+  assert.equal(result.stats.changedBlocks, 1);
+  assert.equal(result.stats.fillerRemoved, 1);
+  assert.equal(result.stats.unprocessedBlocks, 0);
+});
+
+test("模型输出格式无效时，常见语气词、重复和标点由本地规则保底整理", async () => {
+  const source = `## 官方文稿\n\n### 主播\n\n[00:00:01] 嗯，那个，今天今天开始。。\n`;
+  const result = await runTranscriptCleanup({
+    markdown: source,
+    config,
+    executeModel: async () => ({ text: "模型没有返回 JSON" }),
+  });
+
+  assert.match(result.markdown, /\[00:00:01\] 今天开始。/);
+  assert.equal(result.stats.processedBlocks, 1);
+  assert.equal(result.stats.changedBlocks, 1);
+  assert.ok(result.stats.fillerRemoved >= 1);
+  assert.ok(result.stats.repetitionsMerged >= 1);
+  assert.ok(result.stats.punctuationAdjusted >= 1);
+  assert.equal(result.stats.unprocessedBlocks, 0);
+});
+
+test("模型修改未通过安全校验时保留原文，但不把已返回的片段算作未处理", async () => {
+  const source = `## 官方文稿\n\n### 主播\n\n[00:00:01] 一段正常内容。\n\n[00:00:02] 另一段正常内容。\n`;
+  const result = await runTranscriptCleanup({
+    markdown: source,
+    config,
+    executeModel: async (_config, request) => {
+      const input = JSON.parse(request.input) as { blocks: Array<{ id: string }> };
+      return {
+        text: response(input.blocks.map((block) => ({
+          id: block.id,
+          text: "模型擅自重写了整段内容。",
+          changes: [],
+        }))),
+      };
+    },
+  });
+
+  assert.equal(result.markdown, source);
+  assert.equal(result.stats.processedBlocks, 2);
+  assert.equal(result.stats.unprocessedBlocks, 0);
+  assert.equal(result.stats.changedBlocks, 0);
+});
+
 test("system prompt 使用中文安全指令并要求只输出 schema JSON", async () => {
   let request: ModelRequest | undefined;
   await runTranscriptCleanup({

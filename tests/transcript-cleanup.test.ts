@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assembleCleanupDocument,
+  applyLocalCleanup,
   parseCleanupDocument,
   parseCleanupModelResult,
   splitCleanupBlocks,
@@ -130,6 +131,16 @@ test("解析纯 JSON 和可选 json 代码围栏，拒绝解释文字与不合�
   assert.throws(() => parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "x", text: "x", changes: [{ type: "typo", from: "x", to: "y", confidence: 1.2 }] }] })), /confidence/i);
   assert.throws(() => parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "x", text: "x", changes: [{ type: "other", from: "x", to: "y", confidence: 1 }] }] })), /type/i);
   assert.throws(() => parseCleanupModelResult(JSON.stringify({ schemaVersion: 1, segments: [{ id: "x", text: "x", changes: [{ type: ["typo"], from: "x", to: "y", confidence: 0.5 }] }] })), /type/i);
+});
+
+test("本地保底只清理高确定性口语重复，不删除有语义的指代词", () => {
+  const cleaned = applyLocalCleanup("嗯，那个，今天今天开始。。");
+  assert.equal(cleaned.text, "今天开始。");
+  assert.ok(cleaned.changes.some((change) => change.type === "filler"));
+  assert.ok(cleaned.changes.some((change) => change.type === "repetition"));
+  assert.ok(cleaned.changes.some((change) => change.type === "punctuation"));
+  assert.equal(applyLocalCleanup("这个方法很实用。").text, "这个方法很实用。");
+  assert.equal(applyLocalCleanup("然后我们开始讨论。").text, "然后我们开始讨论。");
 });
 
 test("validate 只接受高置信 typo，拒绝低置信、危险、异常长度和空输出", () => {

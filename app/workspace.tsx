@@ -153,6 +153,7 @@ export default function Workspace({
   const [cleanupProcessing, setCleanupProcessing] = useState(false);
   const [cleanupProgress, setCleanupProgress] = useState("准备处理文稿…");
   const [cleanupStats, setCleanupStats] = useState<CleanupStats | null>(null);
+  const [cleanupFallbackBatches, setCleanupFallbackBatches] = useState(0);
   const [cleanupUndoAvailable, setCleanupUndoAvailable] = useState(false);
   const [speakerLayoutStale, setSpeakerLayoutStale] = useState(false);
   const [speakerProcessing, setSpeakerProcessing] = useState(false);
@@ -310,6 +311,7 @@ export default function Workspace({
     setDocumentLoading(true);
     setAnalysisMarkdown("");
     setCleanupStats(null);
+    setCleanupFallbackBatches(0);
     setCleanupUndoAvailable(false);
     setSpeakerLayoutStale(false);
     try {
@@ -356,6 +358,7 @@ export default function Workspace({
       setSelected(data.episode);
       setMarkdown(data.markdown);
       setCleanupStats(null);
+      setCleanupFallbackBatches(0);
       setCleanupUndoAvailable(false);
       setSpeakerLayoutStale(false);
       setDocumentTab("transcript");
@@ -417,6 +420,7 @@ export default function Workspace({
       });
       setMarkdown(result.markdown);
       setCleanupStats(result.stats);
+      setCleanupFallbackBatches(result.failedBatchCount ?? 0);
       setCleanupUndoAvailable(result.undoAvailable !== false);
       setSpeakerLayoutStale(Boolean(result.speakerLayoutStale));
       try { await loadEpisodes(); } catch { /* 尽力刷新列表；不影响已成功的清理结果 */ }
@@ -453,6 +457,7 @@ export default function Workspace({
       const data = await responseJson<{ markdown: string }>(response);
       setMarkdown(data.markdown);
       setCleanupStats(null);
+      setCleanupFallbackBatches(0);
       setCleanupUndoAvailable(false);
       setSpeakerLayoutStale(false);
       try { await loadEpisodes(); } catch { /* 尽力刷新列表；不影响已成功的撤销结果 */ }
@@ -1106,6 +1111,7 @@ export default function Workspace({
                       <span>处理 {cleanupStats.processedBlocks} 段 · 变更 {cleanupStats.changedBlocks} 段</span>
                       <span>删除语气词 {cleanupStats.fillerRemoved} · 合并重复 {cleanupStats.repetitionsMerged} · 修正错字 {cleanupStats.typosFixed}</span>
                       <span>未处理 {cleanupStats.unprocessedBlocks} 段{speakerLayoutStale ? " · 说话人布局需重新生成" : ""}</span>
+                      {cleanupFallbackBatches > 0 && <span>有 {cleanupFallbackBatches} 批模型输出异常，已使用本地规则保底</span>}
                     </div>}
                     <MarkdownPreview markdown={markdown} hideEpisodeMeta />
                   </>

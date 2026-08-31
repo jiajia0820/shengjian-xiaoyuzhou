@@ -8,12 +8,12 @@ import {
   getLocalSpeakerHealth,
   getLocalSpeakerJob,
   localSpeakerErrorMessage,
-  type LocalSpeakerMode,
   type LocalSpeakerTurn,
   type RemoteSpeakerAudioSource,
 } from "@/lib/local-speaker-client";
 import {
   VOICEPRINT_LABELS,
+  parseVoiceprintTimestamp,
   validateVoiceprintReferences,
   type VoiceprintReferences,
 } from "@/lib/voiceprint";
@@ -65,7 +65,7 @@ function phaseLabel(phase: Phase): string {
 }
 
 function toVoiceprintReferences(inputs: ReferenceInputs): VoiceprintReferences {
-  const milliseconds = (value: string) => Math.round(Number(value) * 1000);
+  const milliseconds = (value: string) => parseVoiceprintTimestamp(value) ?? Number.NaN;
   return {
     speaker_0: {
       startMs: milliseconds(inputs.speaker_0.start),
@@ -121,8 +121,6 @@ export function SpeakerDiarizationPanel({
   const [audioDurationMs, setAudioDurationMs] = useState<number | null>(
     episode.durationSeconds && episode.durationSeconds > 0 ? Math.round(episode.durationSeconds * 1000) : null,
   );
-  const [mode, setMode] = useState<LocalSpeakerMode>("diarization");
-  const [expectedSpeakers, setExpectedSpeakers] = useState<number | null>(null);
   const [referenceInputs, setReferenceInputs] = useState<ReferenceInputs>(DEFAULT_REFERENCE_INPUTS);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
@@ -138,9 +136,7 @@ export function SpeakerDiarizationPanel({
   const cancelledRef = useRef(false);
 
   const busy = ["fetching", "validating", "uploading", "diarizing", "saving"].includes(phase);
-  const speakerEngine = mode === "voiceprint"
-    ? "pyannote-wespeaker-voiceprint-v1" as const
-    : "pyannote-community-1" as const;
+  const speakerEngine = "pyannote-wespeaker-voiceprint-v1" as const;
 
   const updatePhase = useCallback((next: Phase) => {
     setPhase(next);
@@ -186,8 +182,6 @@ export function SpeakerDiarizationPanel({
     cancelledRef.current = false;
     setAudioSource(null);
     setAudioDurationMs(episode.durationSeconds && episode.durationSeconds > 0 ? Math.round(episode.durationSeconds * 1000) : null);
-    setMode("diarization");
-    setExpectedSpeakers(null);
     setReferenceInputs(DEFAULT_REFERENCE_INPUTS);
     setPreview(null);
     setTurns([]);
@@ -216,12 +210,10 @@ export function SpeakerDiarizationPanel({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ turns: nextTurns, engine: speakerEngine }),
     }));
-    const nextLabels = mode === "voiceprint"
-      ? data.preview.labels.map((label) => ({
-        ...label,
-        label: VOICEPRINT_LABELS[label.id as ReferenceSpeakerId] ?? label.label,
-      }))
-      : data.preview.labels;
+    const nextLabels = data.preview.labels.map((label) => ({
+      ...label,
+      label: VOICEPRINT_LABELS[label.id as ReferenceSpeakerId] ?? label.label,
+    }));
     const nextPreview = { ...data.preview, labels: nextLabels };
     setPreview(nextPreview);
     setLabels(nextLabels);
@@ -246,28 +238,20 @@ export function SpeakerDiarizationPanel({
         throw new Error("音频超过 2 小时，未开始处理");
       }
 
-      let references: VoiceprintReferences | undefined;
-      if (mode === "voiceprint") {
-        if (audioDurationMs === null) throw new Error("请等待播放器读取音频时长后再开始");
-        references = toVoiceprintReferences(referenceInputs);
-        const validationError = validateVoiceprintReferences(references, audioDurationMs);
-        if (validationError) throw new Error(validationError);
-      }
+      if (audioDurationMs === null) throw new Error("请等待播放器读取音频时长后再开始");
+      const references = toVoiceprintReferences(referenceInputs);
+      const validationError = validateVoiceprintReferences(references, audioDurationMs);
+      if (validationError) throw new Error(validationError);
 
       const health = await getLocalSpeakerHealth();
       if (!health.ffmpegAvailable) throw new Error("本地服务找不到 FFmpeg，请安装后重新启动服务");
-      if (mode === "voiceprint" && health.voiceprintModel === "needs_setup") {
+      if (health.voiceprintModel === "needs_setup") {
         throw new Error("声纹模型尚未登录。请在项目根目录运行 .\\local-audio-service\\.venv\\Scripts\\hf.exe auth login");
-      }
-      if (mode === "diarization" && health.model === "needs_setup") {
-        throw new Error("本地模型尚未登录。请在项目根目录运行 .\\local-audio-service\\.venv\\Scripts\\hf.exe auth login");
       }
 
       updatePhase("uploading");
       const sourceInput: RemoteSpeakerAudioSource = { sourceUrl: source.audioUrl, fallbackUrl: source.relayUrl };
-      const job = mode === "voiceprint"
-        ? await createLocalSpeakerJob(sourceInput, { mode: "voiceprint", references: references as VoiceprintReferences })
-        : await createLocalSpeakerJob(sourceInput, { mode: "diarization", expectedSpeakers });
+      const job = await createLocalSpeakerJob(sourceInput, { mode: "voiceprint", references });
       jobIdRef.current = job.jobId;
       updatePhase("diarizing");
       for (;;) {
@@ -325,13 +309,12 @@ export function SpeakerDiarizationPanel({
     .filter(({ segment }) => showAll || segment.speakerNeedsReview) ?? [];
 
   return <>
-    <button type="button" disabled={disabled} onClick={openPanel}>按单集官方音频识别说话人</button>
+    <button type="button" disabled={disabled} onClick={openPanel}>识别说话人</button>
     {open && <div className="modal-backdrop speaker-diarization-backdrop">
       <section className="connect-modal speaker-diarization-modal" role="dialog" aria-modal="true" aria-labelledby="speaker-diarization-title">
         <button className="modal-close" type="button" disabled={disabled || busy} onClick={() => void close()} aria-label="关闭说话人识别">×</button>
         <p className="modal-kicker">LOCAL · EXPERIMENTAL</p>
         <h2 id="speaker-diarization-title">按说话人分段</h2>
-        <p>系统从当前小宇宙单集获取官方音频，默认直连 CDN 到你电脑上的本地服务；直连失败时才使用短时中转。音频不会上传到声笺服务器，只在本机临时处理，系统不会改写官方正文。</p>
 
         {!preview ? <div className="speaker-upload-form">
           {audioSource ? <div className="speaker-audio">
@@ -347,36 +330,23 @@ export function SpeakerDiarizationPanel({
             <p>{phase === "fetching" ? "正在获取小宇宙官方音频…" : "暂时没有获取到官方音频"}</p>
             {phase !== "fetching" && <button type="button" onClick={() => void fetchAudioSource()}>重新获取官方音频</button>}
           </div>}
-          <label>识别模式
-            <select aria-label="识别模式" value={mode} disabled={disabled || busy} onChange={(event) => setMode(event.target.value as LocalSpeakerMode)}>
-              <option value="diarization">全自动识别</option>
-              <option value="voiceprint">两人声纹</option>
-            </select>
-          </label>
-          {mode === "diarization" && <label>说话人数
-            <select value={expectedSpeakers ?? "auto"} disabled={disabled || busy}
-              onChange={(event) => setExpectedSpeakers(event.target.value === "auto" ? null : Number(event.target.value))}>
-              <option value="auto">自动判断</option>
-              {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => <option key={count} value={count}>{count} 人</option>)}
-            </select>
-          </label>}
-          {mode === "voiceprint" && <div className="speaker-reference-form">
-            <p className="speaker-reference-hint">两人声纹模式只适合已有小宇宙文稿的双人节目。请在播放器中找到只有一人连续说话的片段，各选 5–30 秒（推荐 8–10 秒以上）；避开片头音乐、多人抢话和明显噪声。</p>
+          <div className="speaker-reference-form">
+            <p className="speaker-reference-hint">当前固定使用两人声纹，适合已有小宇宙文稿的双人节目。请在上方原音频播放器中找到只有一人连续说话的片段，各选 5–30 秒（推荐 8–10 秒以上）；避开片头音乐、多人抢话和明显噪声。</p>
             <div className="speaker-reference-grid">
               {(["speaker_0", "speaker_1"] as const).map((speakerId) => <div className="speaker-reference-card" key={speakerId}>
                 <strong>{speakerId === "speaker_0" ? "主持人参考" : "嘉宾参考"}</strong>
-                <label>开始（秒）
-                  <input type="number" min="0" step="0.1" inputMode="decimal" disabled={disabled || busy} value={referenceInputs[speakerId].start}
+                <label>开始（分:秒）
+                  <input type="text" inputMode="numeric" placeholder="例如 10:39" disabled={disabled || busy} value={referenceInputs[speakerId].start}
                     onChange={(event) => updateReference(speakerId, "start", event.target.value)} />
                 </label>
-                <label>结束（秒）
-                  <input type="number" min="0" step="0.1" inputMode="decimal" disabled={disabled || busy} value={referenceInputs[speakerId].end}
+                <label>结束（分:秒）
+                  <input type="text" inputMode="numeric" placeholder="例如 10:39" disabled={disabled || busy} value={referenceInputs[speakerId].end}
                     onChange={(event) => updateReference(speakerId, "end", event.target.value)} />
                 </label>
               </div>)}
             </div>
-            <small>每段必须为 5–30 秒、在音频时长内，且两段不能重叠；5 秒是最低值，越长通常越稳定。</small>
-          </div>}
+            <small>格式：分:秒（例如 10:39）；每段必须为 5–30 秒、在音频时长内，且两段不能重叠；5 秒是最低值，越长通常越稳定。</small>
+          </div>
           <small>上限：2 小时、1GB。将按约 10 分钟分块处理。需要先运行 scripts/start-local-speaker-service.ps1。</small>
           <div className="speaker-progress" aria-live="polite">{phaseLabel(phase)}{phase === "diarizing" && ` ${progress}%`}{phase === "diarizing" && chunkCount > 0 && ` · 第 ${chunkIndex}/${chunkCount} 块`}</div>
           {error && <p className="speaker-error" role="alert">{error}</p>}

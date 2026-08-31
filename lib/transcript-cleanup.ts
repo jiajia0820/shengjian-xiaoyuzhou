@@ -24,6 +24,15 @@ export type CleanupModelResult = {
   segments: Array<{ id: string; text: string; changes: CleanupChange[] }>;
 };
 
+export type LocalCleanupResult = {
+  text: string;
+  changes: CleanupChange[];
+};
+
+export type CleanupValidationOptions = {
+  allowPartial?: boolean;
+};
+
 type Span = { start: number; end: number };
 const TIMESTAMP = /\[(\d{2}:\d{2}:\d{2}(?:\.\d+)?)\]/g;
 const SECTION = /^##\s+(.+?)\s*$/;
@@ -170,6 +179,52 @@ export function splitCleanupBlocks(blocks: readonly CleanupBlock[], maxChars: nu
   return chunks;
 }
 
+const LEADING_FILLER = /^(?:\s*)(?:(?:嗯+|呃+|额+|啊+|唉|那个|这个|就是说)(?:[，,、：:]|\s)+|然后[，,、：:]+)/u;
+const REPEATED_WORD = /(今天|昨天|明天|我们|我|你|他|她|其实|然后|这个|那个|就是|可能|可以|比较|非常|对)(?:[，,、\s]+\1|\1)/u;
+const REPEATED_PUNCTUATION = /([，,。.!！?？；;：:、])\1+/u;
+
+function localChange(
+  type: CleanupChange["type"],
+  from: string,
+  to: string,
+): CleanupChange {
+  return { type, from, to, confidence: 1 };
+}
+
+/**
+ * Apply only high-signal, deterministic disfluency cleanup. This is a fallback
+ * for providers that return malformed/partial output, and also gives the AI
+ * result a safe baseline without touching timestamps or Markdown metadata.
+ */
+export function applyLocalCleanup(value: string): LocalCleanupResult {
+  let text = value;
+  const changes: CleanupChange[] = [];
+  for (let guard = 0; guard < 12; guard++) {
+    const filler = text.match(LEADING_FILLER);
+    if (!filler || !filler[0]) break;
+    const from = filler[0];
+    text = text.slice(from.length);
+    changes.push(localChange("filler", from, ""));
+  }
+  for (let guard = 0; guard < 12; guard++) {
+    const repeated = text.match(REPEATED_WORD);
+    if (!repeated || !repeated[0] || !repeated[1]) break;
+    const phrase = repeated[1];
+    const from = repeated[0];
+    text = `${text.slice(0, repeated.index)}${phrase}${text.slice((repeated.index ?? 0) + from.length)}`;
+    changes.push(localChange("repetition", from, phrase));
+  }
+  for (let guard = 0; guard < 12; guard++) {
+    const repeated = text.match(REPEATED_PUNCTUATION);
+    if (!repeated || !repeated[0] || !repeated[1]) break;
+    const from = repeated[0];
+    const to = repeated[1];
+    text = `${text.slice(0, repeated.index)}${to}${text.slice((repeated.index ?? 0) + from.length)}`;
+    changes.push(localChange("punctuation", from, to));
+  }
+  return { text, changes };
+}
+
 function exactKeys(value: Record<string, unknown>, required: readonly string[], context: string): void {
   const keys = Object.keys(value).sort();
   const expected = [...required].sort();
@@ -192,12 +247,16 @@ export function parseCleanupModelResult(value: string): CleanupModelResult {
   const segments = root.segments.map((raw, index) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new TypeError(`segment ${index} must be an object`);
     const segment = raw as Record<string, unknown>;
-    exactKeys(segment, ["id", "text", "changes"], `segment ${index}`);
+    const segmentKeys = Object.keys(segment).sort();
+    const hasOptionalChangesShape = segmentKeys.length === 2
+      && segmentKeys[0] === "id"
+      && segmentKeys[1] === "text";
+    if (!hasOptionalChangesShape) exactKeys(segment, ["id", "text", "changes"], `segment ${index}`);
     if (typeof segment.id !== "string" || !segment.id || seen.has(segment.id)) throw new TypeError(`segment ${index} has duplicate or invalid id`);
     if (typeof segment.text !== "string") throw new TypeError(`segment ${index}.text must be a string`);
-    if (!Array.isArray(segment.changes)) throw new TypeError(`segment ${index}.changes must be an array`);
+    if (segment.changes !== undefined && !Array.isArray(segment.changes)) throw new TypeError(`segment ${index}.changes must be an array`);
     seen.add(segment.id);
-    const changes = segment.changes.map((rawChange, changeIndex) => {
+    const changes = (segment.changes ?? []).map((rawChange, changeIndex) => {
       if (!rawChange || typeof rawChange !== "object" || Array.isArray(rawChange)) throw new TypeError(`change ${index}.${changeIndex} must be an object`);
       const change = rawChange as Record<string, unknown>;
       exactKeys(change, ["type", "from", "to", "confidence"], `change ${index}.${changeIndex}`);
@@ -223,7 +282,12 @@ function applyDeclaredChanges(original: string, changes: readonly CleanupChange[
   return value;
 }
 
-export function validateCleanupModelResult(document: CleanupDocument, result: CleanupModelResult, allowedIds?: ReadonlySet<string>): { replacements: Map<string, string>; changes: CleanupChange[]; rejectedIds: string[] } {
+export function validateCleanupModelResult(
+  document: CleanupDocument,
+  result: CleanupModelResult,
+  allowedIds?: ReadonlySet<string>,
+  options: CleanupValidationOptions = {},
+): { replacements: Map<string, string>; changes: CleanupChange[]; rejectedIds: string[] } {
   const expected = allowedIds ?? new Set(document.blocks.map((block) => block.id));
   const actual = new Set<string>();
   for (const segment of result.segments) {
@@ -232,14 +296,19 @@ export function validateCleanupModelResult(document: CleanupDocument, result: Cl
   }
   const missing = [...expected].filter((id) => !actual.has(id));
   const extra = [...actual].filter((id) => !expected.has(id));
-  if (missing.length || extra.length) throw codedError("CLEANUP_INVALID_IDS", `missing or extra segment IDs: ${[...missing, ...extra].join(", ")}`);
+  if (!options.allowPartial && (missing.length || extra.length)) {
+    throw codedError("CLEANUP_INVALID_IDS", `missing or extra segment IDs: ${[...missing, ...extra].join(", ")}`);
+  }
   const blocks = new Map(document.blocks.map((block) => [block.id, block]));
   const replacements = new Map<string, string>();
   const changes: CleanupChange[] = [];
   const rejectedIds: string[] = [];
   for (const segment of result.segments) {
     const block = blocks.get(segment.id);
-    if (!block) { rejectedIds.push(segment.id); continue; }
+    if (!block) {
+      if (!options.allowPartial) rejectedIds.push(segment.id);
+      continue;
+    }
     if (!segment.text.trim()) { rejectedIds.push(segment.id); continue; }
     if (segment.text !== block.text && !segment.changes.length) { rejectedIds.push(segment.id); continue; }
     const declaredText = applyDeclaredChanges(block.text, segment.changes);
