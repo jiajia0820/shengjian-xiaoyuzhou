@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/auth-client";
 
 type Message = { role: "user" | "assistant"; content: string; createdAt: string };
@@ -18,6 +18,7 @@ type Props = {
   selectedText: string;
   defaultRole: string;
   onClose: () => void;
+  onCollapsedChange?: (collapsed: boolean) => void;
 };
 
 const STORAGE_PREFIX = "shengjian:analysis-assistant:v1:";
@@ -65,7 +66,7 @@ function messageTime(value: string): string {
   return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
-export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selectedText, defaultRole, onClose }: Props) {
+export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selectedText, defaultRole, onClose, onCollapsedChange }: Props) {
   const initialSession = useMemo(() => readSession(eid, defaultRole), [eid, defaultRole]);
   const [role, setRole] = useState(initialSession.role);
   const [messages, setMessages] = useState<Message[]>(initialSession.messages);
@@ -108,6 +109,18 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
     }
   }
 
+  function handleQuestionKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  }
+
+  function toggleCollapsed() {
+    const next = !isCollapsed;
+    setIsCollapsed(next);
+    onCollapsedChange?.(next);
+  }
+
   return (
     <aside className={`analysis-assistant${isCollapsed ? " is-collapsed" : ""}`} aria-label="AI 助手">
       <header className="analysis-assistant-header">
@@ -120,7 +133,7 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
           <button
             className="analysis-assistant-toggle"
             type="button"
-            onClick={() => setIsCollapsed((current) => !current)}
+            onClick={toggleCollapsed}
             aria-label={isCollapsed ? "展开 AI 助手" : "最小化 AI 助手"}
             aria-expanded={!isCollapsed}
           >{isCollapsed ? "＋" : "−"}</button>
@@ -155,7 +168,7 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
 
         <form className="analysis-assistant-form" onSubmit={submit}>
           <label htmlFor="analysis-assistant-question">继续提问</label>
-          <textarea id="analysis-assistant-question" value={question} maxLength={2_000} rows={3} placeholder="例如：这段判断的原文依据是什么？" onChange={(event) => setQuestion(event.target.value)} disabled={loading} />
+          <textarea id="analysis-assistant-question" value={question} maxLength={2_000} rows={3} placeholder="例如：这段判断的原文依据是什么？" onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleQuestionKeyDown} disabled={loading} />
           <div className="analysis-assistant-form-footer"><small>{question.length}/2000</small><button className="save-button" type="submit" disabled={loading || !question.trim()}>{loading ? "回答中…" : "发送"}</button></div>
         </form>
       </div>

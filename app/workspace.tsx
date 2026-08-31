@@ -210,6 +210,7 @@ export default function Workspace({
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisSelection, setAnalysisSelection] = useState<AnalysisSelection | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantCollapsed, setAssistantCollapsed] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [analysisSource, setAnalysisSource] = useState<"original" | "current">("current");
   const [selectedFrameworkId, setSelectedFrameworkId] = useState(FALLBACK_SYSTEM_FRAMEWORK.id);
@@ -293,6 +294,7 @@ export default function Workspace({
   const selectedSlot = documentTab === "summary" ? `summary:${selectedFrameworkId}`
     : documentTab === "learning_prompt" ? "learning_prompt" : "";
   const selectedAnalysis = analysisResults.find((result) => result.slot === selectedSlot) ?? null;
+  const assistantVisible = Boolean(documentTab === "summary" && analysisSelection && assistantOpen && !assistantCollapsed);
   const hasLegacyLearningPrompt = analysisResults.some((result) => result.kind === "learning_prompt");
   const selectedFramework = frameworkOptions.find((item) => item.id === selectedFrameworkId) ?? null;
 
@@ -360,6 +362,7 @@ export default function Workspace({
     setEditorMode("preview");
     setAnalysisSelection(null);
     setAssistantOpen(false);
+    setAssistantCollapsed(false);
     setDocumentLoading(true);
     setAnalysisMarkdown("");
     setCleanupStats(null);
@@ -417,6 +420,7 @@ export default function Workspace({
       setEditorMode("preview");
       setAnalysisSelection(null);
       setAssistantOpen(false);
+      setAssistantCollapsed(false);
       const analysisData = await responseJson<{ results: AnalysisResult[] }>(
         await apiFetch(`/api/episodes/${data.episode.eid}/analyses`, { cache: "no-store" }),
       );
@@ -594,6 +598,7 @@ export default function Workspace({
     if (cleanupProcessing) return;
     setAnalysisSelection(null);
     setAssistantOpen(false);
+    setAssistantCollapsed(false);
     setDocumentTab(tab);
     setEditorMode("preview");
     if (tab === "summary") void loadAnalysis(`summary:${selectedFrameworkId}`);
@@ -604,6 +609,7 @@ export default function Workspace({
     setSelectedFrameworkId(id);
     setAnalysisSelection(null);
     setAssistantOpen(false);
+    setAssistantCollapsed(false);
     if (documentTab === "summary") void loadAnalysis(`summary:${id}`);
   }
 
@@ -1089,7 +1095,7 @@ export default function Workspace({
       )}
 
       {selected && (
-        <div className="document-drawer" role="dialog" aria-modal="true" aria-labelledby="document-title">
+        <div className={`document-drawer${assistantVisible ? " assistant-open" : ""}`} role="dialog" aria-modal="true" aria-labelledby="document-title">
           <div className="document-sticky-header">
             <div className="drawer-header">
               <div><span>{selected.podcastTitle}</span><h2 id="document-title">{selected.title}</h2></div>
@@ -1221,7 +1227,8 @@ export default function Workspace({
               slot={selectedSlot}
               selectedText={analysisSelection.text}
               defaultRole={inferAssistantRole(`${selected.podcastTitle} ${selected.title}`, analysisSelection.text)}
-              onClose={() => { setAssistantOpen(false); setAnalysisSelection(null); }}
+              onCollapsedChange={setAssistantCollapsed}
+              onClose={() => { setAssistantOpen(false); setAssistantCollapsed(false); setAnalysisSelection(null); }}
             />
           )}
         </div>

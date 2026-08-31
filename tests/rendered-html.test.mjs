@@ -492,12 +492,18 @@ test("wires the selectable analysis assistant sidebar", async () => {
   assert.match(assistant, /最小化 AI 助手/);
   assert.match(assistant, /展开 AI 助手/);
   assert.match(assistant, /isCollapsed/);
+  assert.match(assistant, /requestSubmit/);
+  assert.match(assistant, /shiftKey/);
+  assert.match(assistant, /isComposing/);
   assert.match(assistant, /围绕选中的内容提问/);
   assert.match(assistant, /localStorage/);
   assert.match(styles, /\.analysis-assistant/);
   assert.match(styles, /\.analysis-assistant\s*\{[^}]*height:\s*100dvh/);
   assert.match(styles, /\.analysis-assistant-messages\s*\{[^}]*flex:\s*1 1 0/);
+  assert.match(styles, /\.analysis-assistant-form\s*\{[^}]*flex:\s*0 0 auto/);
   assert.match(styles, /\.analysis-assistant\.is-collapsed/);
+  assert.match(styles, /\.document-drawer\.assistant-open\s*\{[^}]*padding-right/);
+  assert.match(workspace, /assistant-open/);
   assert.doesNotMatch(workspace, /<MarkdownPreview markdown=\{markdown\} hideEpisodeMeta onTextSelection/);
 });
 
