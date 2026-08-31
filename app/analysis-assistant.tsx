@@ -73,6 +73,7 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
   const [context, setContext] = useState<AssistantContext | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   useEffect(() => {
     try {
@@ -108,45 +109,56 @@ export function AnalysisAssistant({ eid, episodeTitle, podcastTitle, slot, selec
   }
 
   return (
-    <aside className="analysis-assistant" aria-label="AI 助手">
+    <aside className={`analysis-assistant${isCollapsed ? " is-collapsed" : ""}`} aria-label="AI 助手">
       <header className="analysis-assistant-header">
-        <div>
+        <div className="analysis-assistant-header-copy">
           <span className="analysis-assistant-kicker">CONTINUE THE THREAD</span>
           <h3>AI 助手</h3>
           <p title={episodeTitle}>{podcastTitle} · {episodeTitle}</p>
         </div>
-        <button className="analysis-assistant-close" type="button" onClick={onClose} aria-label="关闭 AI 助手">×</button>
+        <div className="analysis-assistant-header-actions">
+          <button
+            className="analysis-assistant-toggle"
+            type="button"
+            onClick={() => setIsCollapsed((current) => !current)}
+            aria-label={isCollapsed ? "展开 AI 助手" : "最小化 AI 助手"}
+            aria-expanded={!isCollapsed}
+          >{isCollapsed ? "＋" : "−"}</button>
+          <button className="analysis-assistant-close" type="button" onClick={onClose} aria-label="关闭 AI 助手">×</button>
+        </div>
       </header>
 
-      <div className="analysis-assistant-role">
-        <label htmlFor="analysis-assistant-role">回答身份</label>
-        <input id="analysis-assistant-role" value={role} maxLength={160} onChange={(event) => setRole(event.target.value)} />
-        <small>只决定解释角度，事实以本期文稿为准。</small>
-      </div>
+      <div className="analysis-assistant-content" hidden={isCollapsed}>
+        <div className="analysis-assistant-role">
+          <label htmlFor="analysis-assistant-role">回答身份</label>
+          <input id="analysis-assistant-role" value={role} maxLength={160} onChange={(event) => setRole(event.target.value)} />
+          <small>只决定解释角度，事实以本期文稿为准。</small>
+        </div>
 
-      <div className="analysis-assistant-context" role="status" aria-live="polite">
-        <strong>本次引用</strong>
-        <span>{context ? contextLabel(context) : "当前梳理小节 + 官方原文局部片段"}</span>
-        <blockquote>{selectedText}</blockquote>
-      </div>
+        <div className="analysis-assistant-context" role="status" aria-live="polite">
+          <strong>本次引用</strong>
+          <span>{context ? contextLabel(context) : "当前梳理小节 + 官方原文局部片段"}</span>
+          <blockquote>{selectedText}</blockquote>
+        </div>
 
-      <div className="analysis-assistant-messages" aria-live="polite">
-        {!messages.length && <p className="analysis-assistant-empty">围绕上面选中的内容提问。助手会优先给出原文依据，没有证据时会明确说明不确定。</p>}
-        {messages.map((message, index) => (
-          <article className={`analysis-assistant-message ${message.role}`} key={`${message.createdAt}-${index}`}>
-            <div className="analysis-assistant-message-meta">{message.role === "user" ? "你" : "AI"}{messageTime(message.createdAt) ? ` · ${messageTime(message.createdAt)}` : ""}</div>
-            <div className="analysis-assistant-message-body">{message.content}</div>
-          </article>
-        ))}
-        {loading && <div className="analysis-assistant-loading" role="status">正在结合原文回答…</div>}
-        {error && <div className="analysis-assistant-error" role="alert">{error}</div>}
-      </div>
+        <div className="analysis-assistant-messages" aria-live="polite">
+          {!messages.length && <p className="analysis-assistant-empty">围绕选中的内容提问。助手会优先给出原文依据，没有证据时会标明不确定。</p>}
+          {messages.map((message, index) => (
+            <article className={`analysis-assistant-message ${message.role}`} key={`${message.createdAt}-${index}`}>
+              <div className="analysis-assistant-message-meta">{message.role === "user" ? "你" : "AI"}{messageTime(message.createdAt) ? ` · ${messageTime(message.createdAt)}` : ""}</div>
+              <div className="analysis-assistant-message-body">{message.content}</div>
+            </article>
+          ))}
+          {loading && <div className="analysis-assistant-loading" role="status">正在结合原文回答…</div>}
+          {error && <div className="analysis-assistant-error" role="alert">{error}</div>}
+        </div>
 
-      <form className="analysis-assistant-form" onSubmit={submit}>
-        <label htmlFor="analysis-assistant-question">继续提问</label>
-        <textarea id="analysis-assistant-question" value={question} maxLength={2_000} rows={3} placeholder="例如：这段判断的原文依据是什么？" onChange={(event) => setQuestion(event.target.value)} disabled={loading} />
-        <div className="analysis-assistant-form-footer"><small>{question.length}/2000</small><button className="save-button" type="submit" disabled={loading || !question.trim()}>{loading ? "回答中…" : "发送"}</button></div>
-      </form>
+        <form className="analysis-assistant-form" onSubmit={submit}>
+          <label htmlFor="analysis-assistant-question">继续提问</label>
+          <textarea id="analysis-assistant-question" value={question} maxLength={2_000} rows={3} placeholder="例如：这段判断的原文依据是什么？" onChange={(event) => setQuestion(event.target.value)} disabled={loading} />
+          <div className="analysis-assistant-form-footer"><small>{question.length}/2000</small><button className="save-button" type="submit" disabled={loading || !question.trim()}>{loading ? "回答中…" : "发送"}</button></div>
+        </form>
+      </div>
     </aside>
   );
 }
